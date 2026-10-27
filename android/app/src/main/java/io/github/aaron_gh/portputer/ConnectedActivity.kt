@@ -36,6 +36,8 @@ class ConnectedActivity : Activity(), Connection.Listener {
     private lateinit var mic: Switch
     private lateinit var shareClipboard: Switch
     private lateinit var files: Button
+    private lateinit var useRelay: Switch
+    private lateinit var useRelayHelp: TextView
     private lateinit var micHelp: TextView
     private lateinit var volume: SeekBar
     private lateinit var power: Button
@@ -64,6 +66,9 @@ class ConnectedActivity : Activity(), Connection.Listener {
         files = findViewById(R.id.files)
         shareClipboard.setOnCheckedChangeListener { _, on -> if (!updating) Connection.setShareClipboard(on) }
         files.setOnClickListener { startActivity(Intent(this, FilesActivity::class.java)) }
+        useRelay = findViewById(R.id.use_relay)
+        useRelayHelp = findViewById(R.id.use_relay_help)
+        useRelay.setOnCheckedChangeListener { _, on -> if (!updating) Connection.setUseRelay(on) }
         micHelp = findViewById(R.id.mic_help)
         volume = findViewById(R.id.volume)
         power = findViewById(R.id.power)
@@ -189,6 +194,9 @@ class ConnectedActivity : Activity(), Connection.Listener {
                     shareClipboard.visibility = if (info.files) View.VISIBLE else View.GONE
                     shareClipboard.isChecked = Settings(this).shareClipboard
                     files.visibility = shareClipboard.visibility
+                    useRelay.visibility = if (Connection.relayAvailable) View.VISIBLE else View.GONE
+                    useRelayHelp.visibility = useRelay.visibility
+                    useRelay.isChecked = Connection.useRelay
                 }
             }
             is Connection.State.Reconnecting -> {
@@ -225,7 +233,7 @@ class ConnectedActivity : Activity(), Connection.Listener {
     }
 
     private fun setControlsEnabled(enabled: Boolean) {
-        listOf<View>(capture, audio, muteSpeakers, mic, shareClipboard, files, volume, power, findViewById(R.id.keys), findViewById(R.id.text)).forEach { it.isEnabled = enabled }
+        listOf<View>(capture, audio, muteSpeakers, mic, shareClipboard, files, useRelay, volume, power, findViewById(R.id.keys), findViewById(R.id.text)).forEach { it.isEnabled = enabled }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {

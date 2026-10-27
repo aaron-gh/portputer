@@ -15,6 +15,7 @@ pub mod protocol;
 pub mod relay;
 pub mod server;
 pub mod transport;
+pub mod turn;
 pub mod udp;
 pub mod wol;
 

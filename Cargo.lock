@@ -979,6 +979,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "md-5"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
+dependencies = [
+ "cfg-if",
+ "digest 0.11.3",
+]
+
+[[package]]
 name = "mdns-sd"
 version = "0.21.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1346,6 +1356,7 @@ dependencies = [
  "if-addrs",
  "libc",
  "mac_address",
+ "md-5",
  "mdns-sd",
  "ndk",
  "objc2",
@@ -1359,6 +1370,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "sha1 0.11.0",
  "sha2",
  "snow",
  "thiserror 2.0.21",
@@ -1693,6 +1705,17 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
  "digest 0.10.7",
+]
+
+[[package]]
+name = "sha1"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.1",
+ "digest 0.11.3",
 ]
 
 [[package]]
@@ -2101,7 +2124,7 @@ dependencies = [
  "rand",
  "rustls",
  "rustls-pki-types",
- "sha1",
+ "sha1 0.10.7",
  "thiserror 2.0.21",
  "utf-8",
 ]

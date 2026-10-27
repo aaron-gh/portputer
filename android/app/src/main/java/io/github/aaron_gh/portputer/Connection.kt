@@ -58,6 +58,9 @@ object Connection {
         private set
     var micOn = false
         private set
+    /** Use Internet Relay: off for each connection. */
+    var useRelay = false
+        private set
     private var clipboard: ClipboardSync? = null
 
     /** The session, for transfers, which run on their own threads. */
@@ -173,6 +176,7 @@ object Connection {
         audioWanted = false
         micWanted = false
         micOn = false
+        useRelay = false
         held.clear()
         if (state !is State.Idle) {
             state = State.Idle
@@ -254,6 +258,16 @@ object Connection {
         changed()
     }
 
+    /** Whether the connected computer can be reached through the relay. */
+    val relayAvailable: Boolean
+        get() = session?.relayAvailable() == true
+
+    fun setUseRelay(on: Boolean) {
+        useRelay = on
+        session?.setUseRelay(on)
+        changed()
+    }
+
     fun setSpeakersMuted(muted: Boolean) {
         Settings(app).muteSpeakers = muted
         session?.setSpeakersMuted(muted)
@@ -301,6 +315,7 @@ object Connection {
             audioWanted = false
             micWanted = false
             micOn = false
+            useRelay = false
             held.clear()
             state = State.Closed(name, app.getString(R.string.closed, name, reason))
             changed()
@@ -316,6 +331,10 @@ object Connection {
             }
             if (code == "mic_failed") {
                 micWanted = false
+                changed()
+            }
+            if (code == "relay_failed") {
+                useRelay = false
                 changed()
             }
             say(message)

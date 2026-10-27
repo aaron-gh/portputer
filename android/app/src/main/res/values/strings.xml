@@ -48,6 +48,8 @@
     <string name="connected_nobody">Connected to %1$s.</string>
     <string name="connected_login_window">Connected to %1$s at the login window.</string>
     <string name="connected_via_relay">Through the internet relay.</string>
+    <string name="use_relay_switch">Use Internet Relay</string>
+    <string name="use_relay_help">Connects through the internet relay even when the computer is reachable directly, such as through Tailscale.</string>
     <string name="reconnecting">Connection to %1$s lost. Reconnecting.</string>
     <string name="closed">Disconnected from %1$s. %2$s</string>
     <string name="connect_failed">Couldn\'t connect to %1$s. %2$s</string>

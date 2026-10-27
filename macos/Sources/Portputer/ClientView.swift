@@ -148,6 +148,11 @@ struct ClientView: View {
             if info.mic {
                 Toggle("Send Microphone", isOn: Binding(get: { model.micWanted }, set: { model.setMic($0) }))
             }
+            if model.relayAvailable {
+                Toggle("Use Internet Relay", isOn: Binding(get: { model.useRelay }, set: { model.setUseRelay($0) }))
+                Text("Connects through the internet relay even when \(info.name) is reachable directly, such as through Tailscale.")
+                    .font(.caption)
+            }
             HStack {
                 Menu("Keys and Shortcuts") {
                     ForEach(keyMenu(os: info.os), id: \.title) { section in

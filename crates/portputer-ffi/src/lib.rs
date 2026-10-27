@@ -543,8 +543,20 @@ impl ClientSession {
         self.session.set_volume(volume);
     }
 
+    /// Milliseconds of audio buffer; 0 is automatic.
     pub fn set_latency_ms(&self, ms: u32) {
         self.session.set_latency_ms(ms);
+    }
+
+    /// Use Internet Relay: through the relay even when the computer can be
+    /// reached directly. Off for each new session.
+    pub fn set_use_relay(&self, on: bool) {
+        self.session.set_use_relay(on);
+    }
+
+    /// Whether the computer can be reached through the relay.
+    pub fn relay_available(&self) -> bool {
+        self.session.relay_available()
     }
 
     pub fn audio_stats(&self) -> Option<AudioStats> {

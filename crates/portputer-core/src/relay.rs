@@ -257,12 +257,43 @@ mod tests {
 
 /// Whether the computer is listening at the relay now, for a paired device.
 pub fn status(access: &RelayAccess) -> Result<bool, Error> {
-    install_crypto();
     let base = access.url.trim().trim_end_matches('/');
-    let url = format!("{base}/status/{}?token={}", access.room, access.token);
-    let agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(5))).build().new_agent();
-    let mut response = agent.get(&url).call().map_err(|e| Error::Protocol(format!("relay: {e}")))?;
-    let text = response.body_mut().read_to_string().map_err(|e| Error::Protocol(format!("relay: {e}")))?;
-    let body: serde_json::Value = serde_json::from_str(&text)?;
+    let body: serde_json::Value = serde_json::from_str(&get_json(&format!("{base}/status/{}?token={}", access.room, access.token))?)?;
     Ok(body["online"].as_bool().unwrap_or(false))
+}
+
+fn get_json(url: &str) -> Result<String, Error> {
+    install_crypto();
+    let agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(5))).build().new_agent();
+    let mut response = agent.get(url).call().map_err(|e| Error::Protocol(format!("relay: {e}")))?;
+    response.body_mut().read_to_string().map_err(|e| Error::Protocol(format!("relay: {e}")))
+}
+
+/// PORTPUTER_TURN_TEST=host:port,username,password stands in for the
+/// relay's TURN credentials, for tests against a local TURN server.
+fn test_credentials() -> Option<crate::turn::Credentials> {
+    let setting = std::env::var("PORTPUTER_TURN_TEST").ok()?;
+    let mut parts = setting.splitn(3, ',');
+    let (server, username, credential) = (parts.next()?, parts.next()?, parts.next()?);
+    Some(crate::turn::Credentials { urls: vec![format!("turn:{server}?transport=udp")], username: username.into(), credential: credential.into() })
+}
+
+/// TURN credentials for a paired device, from its computer's room. Fails
+/// when the relay has no TURN service set up.
+pub fn turn_credentials(access: &RelayAccess) -> Result<crate::turn::Credentials, Error> {
+    if let Some(credentials) = test_credentials() {
+        return Ok(credentials);
+    }
+    let base = access.url.trim().trim_end_matches('/');
+    Ok(serde_json::from_str(&get_json(&format!("{base}/turn/{}?token={}", access.room, access.token))?)?)
+}
+
+/// TURN credentials for the computer, with its room key.
+pub fn turn_credentials_for_home(home: &RelayHome) -> Result<crate::turn::Credentials, Error> {
+    if let Some(credentials) = test_credentials() {
+        return Ok(credentials);
+    }
+    let url = home.url().filter(|_| home.enabled).ok_or_else(|| Error::Protocol("the relay is off".into()))?;
+    let base = url.trim().trim_end_matches('/');
+    Ok(serde_json::from_str(&get_json(&format!("{base}/turn/{}?key={}", home.room, home.key))?)?)
 }

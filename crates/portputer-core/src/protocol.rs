@@ -70,12 +70,20 @@ pub enum ClientMessage {
     AudioStart {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         mute: bool,
+        /// Through the relay: the client's relayed address at the TURN
+        /// service, for the audio to be sent to over TURN.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn: Option<String>,
     },
     AudioStop,
     MuteSpeakers { muted: bool },
     /// Starts sending this device's microphone, which the computer offers to
     /// its apps as Portputer Microphone.
-    MicStart,
+    MicStart {
+        /// As for `AudioStart`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn: Option<String>,
+    },
     MicStop,
     /// Sends the server's clipboard whenever it changes.
     ClipboardWatch { on: bool },
@@ -130,10 +138,21 @@ pub enum ServerMessage {
         sample_rate: u32,
         channels: u16,
         frames: u32,
+        /// The server's relayed address at the TURN service, when it took
+        /// the client's: the packets go over TURN. Otherwise a relayed
+        /// client opens a datagram connection.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn: Option<String>,
     },
     AudioStopped { reason: String },
     /// Where to send microphone packets (kind 3, 48 kHz mono, 5 ms), and their key.
-    MicReady { port: u16, key: String },
+    MicReady {
+        port: u16,
+        key: String,
+        /// As for `AudioReady`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn: Option<String>,
+    },
     MicStopped { reason: String },
     /// The server's room at the internet relay and this client's token
     /// there, for when the server isn't on the client's network. Sent to
@@ -165,6 +184,8 @@ pub mod errors {
     pub const AUDIO_FAILED: &str = "audio_failed";
     pub const MUTE_FAILED: &str = "mute_failed";
     pub const MIC_FAILED: &str = "mic_failed";
+    /// Client side: Use Internet Relay couldn't connect through the relay.
+    pub const RELAY_FAILED: &str = "relay_failed";
     pub const BAD_MESSAGE: &str = "bad_message";
     pub const VERSION: &str = "version";
 }

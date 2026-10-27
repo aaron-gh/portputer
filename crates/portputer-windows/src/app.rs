@@ -40,6 +40,7 @@ mod id {
     pub const MUTE_SPEAKERS: u16 = 312;
     pub const MIC: u16 = 313;
     pub const SEND_FILES: u16 = 314;
+    pub const USE_RELAY: u16 = 315;
     pub const RELAY_URL: u16 = 107;
     pub const RELAY_ON: u16 = 108;
     pub const RELAY_SAVE: u16 = 109;
@@ -92,6 +93,7 @@ struct Controls {
     audio: HWND,
     mute_speakers: HWND,
     mic: HWND,
+    use_relay: HWND,
     volume_label: HWND,
     volume: HWND,
     keys: HWND,
@@ -295,6 +297,7 @@ impl App {
             audio: ui::checkbox(hwnd, "Computer audio", id::AUDIO),
             mute_speakers: ui::checkbox(hwnd, "Mute computer speakers", id::MUTE_SPEAKERS),
             mic: ui::checkbox(hwnd, "Send microphone", id::MIC),
+            use_relay: ui::checkbox(hwnd, "Use internet relay, even when the computer is reachable directly", id::USE_RELAY),
             volume_label: l("Audio volume"),
             volume: ui::trackbar(hwnd, id::VOLUME),
             keys: ui::button(hwnd, "Keys and Shortcuts", id::KEYS),
@@ -345,6 +348,7 @@ impl App {
         f.row(&[(c.pair_code, 3), (c.pair, 1)], h + 2);
         f.row(&[(c.capture, 1)], h);
         f.row(&[(c.audio, 1), (c.mute_speakers, 1), (c.mic, 1)], h);
+        f.row(&[(c.use_relay, 1)], h);
         f.row(&[(c.volume_label, 1), (c.volume, 3)], 30);
         f.row(&[(c.keys, 1), (c.power, 1), (c.release_all, 1), (c.send_files, 1)], h + 4);
         f.row(&[(c.text_label, 1), (c.text, 3), (c.type_text, 1)], h + 2);
@@ -385,7 +389,7 @@ impl App {
         for h in [c.pair_label, c.pair_code, c.pair] {
             ui::show(h, untrusted);
         }
-        for h in [c.capture, c.audio, c.mute_speakers, c.mic, c.volume_label, c.volume, c.keys, c.power, c.release_all, c.send_files, c.text_label, c.text, c.type_text] {
+        for h in [c.capture, c.audio, c.mute_speakers, c.mic, c.use_relay, c.volume_label, c.volume, c.keys, c.power, c.release_all, c.send_files, c.text_label, c.text, c.type_text] {
             ui::show(h, info.as_ref().is_some_and(|i| i.trusted));
             ui::enable(h, trusted);
         }
@@ -395,6 +399,7 @@ impl App {
             ui::enable(c.volume, trusted && i.audio);
             ui::show(c.mute_speakers, i.trusted && i.audio && i.mute);
             ui::show(c.mic, i.trusted && i.mic);
+            ui::show(c.use_relay, i.trusted && self.session.as_ref().is_some_and(|s| s.relay_available()));
             ui::show(c.send_files, i.trusted && i.files);
             ui::enable(c.power, trusted && !i.power.is_empty());
         }
@@ -601,6 +606,7 @@ impl App {
                 self.session = None;
                 self.conn = Conn::Idle;
                 self.audio_wanted = false;
+                ui::set_checked(self.c.use_relay, false);
                 self.say(&format!("Disconnected. {reason}"));
                 self.refresh();
             }
@@ -612,6 +618,9 @@ impl App {
                 }
                 if code == "mic_failed" {
                     ui::set_checked(self.c.mic, false);
+                }
+                if code == "relay_failed" {
+                    ui::set_checked(self.c.use_relay, false);
                 }
                 self.say(&message);
             }
@@ -632,6 +641,7 @@ impl App {
             s.close();
         }
         self.audio_wanted = false;
+        ui::set_checked(self.c.use_relay, false);
         if self.conn != Conn::Idle {
             self.conn = Conn::Idle;
             self.say("Disconnected.");
@@ -827,6 +837,11 @@ impl App {
                 }
             }
             id::SEND_FILES => self.send_files(),
+            id::USE_RELAY => {
+                if let Some(s) = &self.session {
+                    s.set_use_relay(ui::checked(self.c.use_relay));
+                }
+            }
             id::MUTE_SPEAKERS => {
                 let muted = ui::checked(self.c.mute_speakers);
                 set_setting("mute_speakers", if muted { "1" } else { "0" });

@@ -3,7 +3,7 @@
 //! drops, as it does when the computer restarts or someone logs in.
 
 use std::collections::HashMap;
-use std::net::{IpAddr, UdpSocket};
+use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -107,6 +107,7 @@ pub struct ClientConfig {
 
 enum Command {
     Send(ClientMessage),
+    UseRelay(bool),
     Pair(String, std::sync::mpsc::Sender<Result<(), String>>),
     Close,
 }
@@ -296,6 +297,8 @@ impl Session {
             clipboard_wanted: config.local_clipboard,
             local_clipboard: config.local_clipboard,
             own_clipboard: Arc::new(std::sync::atomic::AtomicI64::new(-1)),
+            use_relay: false,
+            turn_failed: false,
         };
         runtime().spawn(task.run(conn, rx));
         Ok(session)
@@ -341,7 +344,7 @@ impl Session {
 
     pub fn start_audio(&self) {
         let mute = self.inner.settings.lock().unwrap().mute_speakers;
-        self.send(ClientMessage::AudioStart { mute });
+        self.send(ClientMessage::AudioStart { mute, turn: None });
     }
 
     /// Keeps the sound from the computer's own speakers while it streams here.
@@ -352,7 +355,7 @@ impl Session {
 
     /// Sends this device's microphone to the computer.
     pub fn start_mic(&self) {
-        self.send(ClientMessage::MicStart);
+        self.send(ClientMessage::MicStart { turn: None });
     }
 
     pub fn stop_mic(&self) {
@@ -423,6 +426,19 @@ impl Session {
         }
     }
 
+    /// Connects through the internet relay even when the computer can be
+    /// reached directly (on), or moves back to a direct connection (off).
+    /// Off for each new session.
+    pub fn set_use_relay(&self, on: bool) {
+        let _ = self.inner.tx.send(Command::UseRelay(on));
+    }
+
+    /// Whether this computer can be reached through the relay.
+    pub fn relay_available(&self) -> bool {
+        let Some(id) = self.inner.info.lock().unwrap().as_ref().map(|i| i.id.clone()) else { return false };
+        ClientStore::new(&self.inner.store_dir).server(&id).is_some_and(|s| s.relay.is_some())
+    }
+
     pub fn audio_stats(&self) -> Option<JitterStats> {
         self.inner.jitter.lock().unwrap().as_ref().map(|j| j.lock().unwrap().stats)
     }
@@ -471,14 +487,25 @@ struct Supervisor {
     local_clipboard: bool,
     /// This computer's clipboard change count after Portputer wrote it.
     own_clipboard: Arc<std::sync::atomic::AtomicI64>,
+    /// Use Internet Relay: stay on the relay, even with a direct address.
+    use_relay: bool,
+    /// TURN didn't work in this session: the relay's datagram connections
+    /// carry audio and the microphone instead.
+    turn_failed: bool,
+}
+
+/// Nothing arrived over TURN in time.
+enum TurnFallback {
+    Audio,
+    Mic,
 }
 
 enum Ended {
     Closed,
     Lost(String),
     Refused(String),
-    /// A direct connection to the same computer, to use in place of the
-    /// relayed one.
+    /// Another connection to the same computer to use in its place: direct
+    /// in place of relayed, or relayed when Use Internet Relay is turned on.
     Switch(Box<Conn>),
 }
 
@@ -502,9 +529,9 @@ impl Supervisor {
                     self.emit(SessionEvent::State(SessionState::Closed { reason }));
                     return;
                 }
-                Ended::Switch(direct) => {
-                    tracing::info!("moved from the relay to {}", direct.info.host);
-                    conn = *direct;
+                Ended::Switch(other) => {
+                    tracing::info!("connection moved to {}", if other.info.via_relay { "the relay" } else { &other.info.host });
+                    conn = *other;
                     continue;
                 }
                 Ended::Lost(reason) => {
@@ -568,8 +595,13 @@ impl Supervisor {
         while started.elapsed() < RECONNECT_FOR {
             let (direct, relayed): (Vec<Endpoint>, Vec<Endpoint>) = self.candidates(info).into_iter().partition(|e| matches!(e, Endpoint::Tcp(..)));
             let addresses: Vec<(String, u16)> = direct.into_iter().filter_map(|e| if let Endpoint::Tcp(h, p) = e { Some((h, p)) } else { None }).collect();
-            // Every direct address at once, then the relay.
-            for endpoint in std::iter::once(None).chain(relayed.into_iter().map(Some)) {
+            // Every direct address at once, then the relay; the relay first
+            // with Use Internet Relay on.
+            let mut order: Vec<Option<Endpoint>> = std::iter::once(None).chain(relayed.into_iter().map(Some)).collect();
+            if self.use_relay {
+                order.rotate_left(1);
+            }
+            for endpoint in order {
                 // Anything asked for meanwhile is dropped: keys typed into a
                 // computer that isn't there shouldn't arrive later.
                 while let Ok(command) = rx.try_recv() {
@@ -582,6 +614,7 @@ impl Supervisor {
                             let _ = reply.send(Err("Not connected.".into()));
                         }
                         Command::Send(_) => {}
+                        Command::UseRelay(on) => self.use_relay = on,
                     }
                 }
                 let attempt = match &endpoint {
@@ -638,12 +671,18 @@ impl Supervisor {
         let mut upgrade_timer = tokio::time::interval(Duration::from_secs(60));
         let mut last_heard = Instant::now();
         let mut n = 0u64;
+        // Through the relay: TURN allocations waiting for the server's
+        // answer, and word when nothing comes over TURN.
+        let mut audio_turn: Option<Arc<crate::turn::Allocation>> = None;
+        let mut mic_turn: Option<Arc<crate::turn::Allocation>> = None;
+        let (fallback_tx, mut fallback_rx) = mpsc::unbounded_channel::<TurnFallback>();
+        // Set while audio restarts without TURN, so it isn't announced twice.
+        let mut audio_restarting = false;
         if info.trusted && self.audio_wanted {
-            let mute = self.inner.settings.lock().unwrap().mute_speakers;
-            let _ = writer.send(&ClientMessage::AudioStart { mute }).await;
+            let _ = self.send_audio_start(&info, &writer, &mut audio_turn).await;
         }
         if info.trusted && self.mic_wanted {
-            let _ = writer.send(&ClientMessage::MicStart).await;
+            let _ = self.send_mic_start(&info, &writer, &mut mic_turn).await;
         }
         let mut local_watch: Option<tokio::task::JoinHandle<()>> = None;
         if info.trusted && info.files && self.clipboard_wanted {
@@ -669,26 +708,47 @@ impl Supervisor {
                                 pending_pair = Some((code, reply));
                             }
                         }
+                        Command::UseRelay(on) => {
+                            self.use_relay = on;
+                            if !info.trusted || on == info.via_relay {
+                                continue;
+                            }
+                            if let Some(t) = upgrade.take() {
+                                t.abort();
+                            }
+                            upgrade = Some(if on { self.switch_to_relay(&info, upgrade_tx.clone()) } else { self.try_direct(&info, upgrade_tx.clone()) });
+                        }
                         Command::Send(message) => {
                             if !info.trusted {
                                 continue;
                             }
-                            match &message {
-                                ClientMessage::AudioStart { .. } => self.audio_wanted = true,
-                                ClientMessage::MicStart => self.mic_wanted = true,
-                                ClientMessage::ClipboardWatch { on } => self.clipboard_wanted = *on,
-                                ClientMessage::MicStop => {
-                                    self.mic_wanted = false;
-                                    mic = None;
+                            let sent = match message {
+                                ClientMessage::AudioStart { .. } => {
+                                    self.audio_wanted = true;
+                                    self.send_audio_start(&info, &writer, &mut audio_turn).await
                                 }
-                                ClientMessage::AudioStop => {
-                                    self.audio_wanted = false;
-                                    audio = None;
-                                    *self.inner.jitter.lock().unwrap() = None;
+                                ClientMessage::MicStart { .. } => {
+                                    self.mic_wanted = true;
+                                    self.send_mic_start(&info, &writer, &mut mic_turn).await
                                 }
-                                _ => {}
-                            }
-                            if let Err(e) = writer.send(&message).await {
+                                message => {
+                                    match &message {
+                                        ClientMessage::ClipboardWatch { on } => self.clipboard_wanted = *on,
+                                        ClientMessage::MicStop => {
+                                            self.mic_wanted = false;
+                                            mic = None;
+                                        }
+                                        ClientMessage::AudioStop => {
+                                            self.audio_wanted = false;
+                                            audio = None;
+                                            *self.inner.jitter.lock().unwrap() = None;
+                                        }
+                                        _ => {}
+                                    }
+                                    writer.send(&message).await
+                                }
+                            };
+                            if let Err(e) = sent {
                                 break Ended::Lost(e.to_string());
                             }
                         }
@@ -748,16 +808,23 @@ impl Supervisor {
                             }
                         }
                         ServerMessage::Notice { code, message } => self.emit(SessionEvent::Notice { code, message }),
-                        ServerMessage::AudioReady { port, key, sample_rate, channels, frames } => {
+                        ServerMessage::AudioReady { port, key, sample_rate, channels, frames, turn } => {
                             audio = None;
-                            let started = match peer_ip {
-                                Some(ip) => self.start_audio(ip, port, &key, sample_rate, channels, frames),
-                                None => self.start_audio_relayed(&info, &key, sample_rate, channels, frames),
+                            let turn = match (turn.and_then(|t| t.parse::<SocketAddr>().ok()), audio_turn.take()) {
+                                (Some(peer), Some(allocation)) if peer_ip.is_none() => self.bind_turn(allocation, peer).await,
+                                _ => None,
+                            };
+                            let started = match (peer_ip, turn) {
+                                (Some(ip), _) => self.start_audio(ip, port, &key, sample_rate, channels, frames),
+                                (None, Some(turn)) => self.start_audio_turn(turn, &key, sample_rate, channels, frames, fallback_tx.clone()),
+                                (None, None) => self.start_audio_relayed(&info, &key, sample_rate, channels, frames),
                             };
                             match started {
                                 Ok(a) => {
                                     audio = Some(a);
-                                    self.emit(SessionEvent::AudioStarted { sample_rate });
+                                    if !std::mem::take(&mut audio_restarting) {
+                                        self.emit(SessionEvent::AudioStarted { sample_rate });
+                                    }
                                 }
                                 Err(e) => {
                                     let _ = writer.send(&ClientMessage::AudioStop).await;
@@ -766,11 +833,16 @@ impl Supervisor {
                                 }
                             }
                         }
-                        ServerMessage::MicReady { port, key } => {
+                        ServerMessage::MicReady { port, key, turn } => {
                             mic = None;
-                            let started = match peer_ip {
-                                Some(ip) => start_mic_sender(ip, port, &key),
-                                None => self.start_mic_relayed(&info, &key),
+                            let turn = match (turn.and_then(|t| t.parse::<SocketAddr>().ok()), mic_turn.take()) {
+                                (Some(peer), Some(allocation)) if peer_ip.is_none() => self.bind_turn(allocation, peer).await,
+                                _ => None,
+                            };
+                            let started = match (peer_ip, turn) {
+                                (Some(ip), _) => start_mic_sender(ip, port, &key),
+                                (None, Some(turn)) => start_mic_turn(turn, &key, fallback_tx.clone()),
+                                (None, None) => self.start_mic_relayed(&info, &key),
                             };
                             match started {
                                 Ok(m) => {
@@ -787,7 +859,7 @@ impl Supervisor {
                         ServerMessage::Addresses { addresses, port } => {
                             if info.trusted {
                                 let _ = self.store.update(&info.id, |s| remember_addresses(s, &addresses, port));
-                                if info.via_relay && upgrade.as_ref().is_none_or(|t| t.is_finished()) {
+                                if info.via_relay && !self.use_relay && upgrade.as_ref().is_none_or(|t| t.is_finished()) {
                                     upgrade = Some(self.try_direct(&info, upgrade_tx.clone()));
                                 }
                             }
@@ -830,8 +902,33 @@ impl Supervisor {
                         ServerMessage::Pong { .. } | ServerMessage::Welcome { .. } => {}
                     }
                 }
-                Some(direct) = upgrade_rx.recv() => break Ended::Switch(Box::new(direct)),
-                _ = upgrade_timer.tick(), if info.via_relay && info.trusted => {
+                Some(other) = upgrade_rx.recv() => {
+                    // One that no longer matches Use Internet Relay is dropped.
+                    if other.info.via_relay == self.use_relay {
+                        break Ended::Switch(Box::new(other));
+                    }
+                }
+                Some(what) = fallback_rx.recv() => {
+                    tracing::info!("nothing came over TURN; using the relay's datagram connections");
+                    self.turn_failed = true;
+                    let restarted = match what {
+                        TurnFallback::Audio if self.audio_wanted && audio.is_some() => {
+                            audio = None;
+                            *self.inner.jitter.lock().unwrap() = None;
+                            audio_restarting = true;
+                            self.send_audio_start(&info, &writer, &mut audio_turn).await
+                        }
+                        TurnFallback::Mic if self.mic_wanted && mic.is_some() => {
+                            mic = None;
+                            self.send_mic_start(&info, &writer, &mut mic_turn).await
+                        }
+                        _ => Ok(()),
+                    };
+                    if let Err(e) = restarted {
+                        break Ended::Lost(e.to_string());
+                    }
+                }
+                _ = upgrade_timer.tick(), if info.via_relay && info.trusted && !self.use_relay => {
                     if upgrade.as_ref().is_none_or(|t| t.is_finished()) {
                         upgrade = Some(self.try_direct(&info, upgrade_tx.clone()));
                     }
@@ -917,6 +1014,132 @@ impl Supervisor {
         Ok(AudioReceiver { stop, _playback: playback, task: None })
     }
 
+    /// Through the relay: a TURN allocation for audio or the microphone,
+    /// unless TURN already failed in this session or the relay has none.
+    async fn client_turn(&mut self, info: &ServerInfo) -> Option<Arc<crate::turn::Allocation>> {
+        if !info.via_relay || self.turn_failed {
+            return None;
+        }
+        let access = self.store.server(&info.id)?.relay?;
+        let setup = tokio::task::spawn_blocking(move || -> Result<crate::turn::Allocation, Error> {
+            crate::turn::Allocation::new(&crate::relay::turn_credentials(&access)?)
+        });
+        match tokio::time::timeout(Duration::from_secs(5), setup).await {
+            Ok(Ok(Ok(allocation))) => Some(Arc::new(allocation)),
+            other => {
+                if let Ok(Ok(Err(e))) = other {
+                    tracing::info!("TURN not used: {e}");
+                }
+                self.turn_failed = true;
+                None
+            }
+        }
+    }
+
+    /// Binds a TURN allocation's channel to the server's relayed address.
+    async fn bind_turn(&mut self, allocation: Arc<crate::turn::Allocation>, peer: SocketAddr) -> Option<Arc<crate::turn::Allocation>> {
+        let bound = allocation.clone();
+        match tokio::task::spawn_blocking(move || bound.bind(peer)).await {
+            Ok(Ok(())) => Some(allocation),
+            _ => {
+                self.turn_failed = true;
+                None
+            }
+        }
+    }
+
+    async fn send_audio_start(&mut self, info: &ServerInfo, writer: &Writer, pending: &mut Option<Arc<crate::turn::Allocation>>) -> Result<(), Error> {
+        let mute = self.inner.settings.lock().unwrap().mute_speakers;
+        *pending = self.client_turn(info).await;
+        let turn = pending.as_ref().map(|a| a.relayed().to_string());
+        writer.send(&ClientMessage::AudioStart { mute, turn }).await
+    }
+
+    async fn send_mic_start(&mut self, info: &ServerInfo, writer: &Writer, pending: &mut Option<Arc<crate::turn::Allocation>>) -> Result<(), Error> {
+        *pending = self.client_turn(info).await;
+        let turn = pending.as_ref().map(|a| a.relayed().to_string());
+        writer.send(&ClientMessage::MicStart { turn }).await
+    }
+
+    /// Audio over TURN, with keep-alives back so the path stays open. When
+    /// nothing arrives within 3 seconds, `fallback` hears of it.
+    fn start_audio_turn(
+        &self,
+        turn: Arc<crate::turn::Allocation>,
+        key: &str,
+        rate: u32,
+        channels: u16,
+        frames: u32,
+        fallback: mpsc::UnboundedSender<TurnFallback>,
+    ) -> Result<AudioReceiver, Error> {
+        let key = PacketKey::new(&hex::decode(key).ok().and_then(|k| k.try_into().ok()).ok_or_else(|| Error::Protocol("bad audio key".into()))?);
+        let (volume, latency) = {
+            let s = self.inner.settings.lock().unwrap();
+            (s.volume, s.latency_ms)
+        };
+        let mut buffer = JitterBuffer::new(rate, channels, frames, latency);
+        buffer.gain = volume;
+        let jitter = Arc::new(Mutex::new(buffer));
+        let stop = Arc::new(AtomicBool::new(false));
+        let arrived = Arc::new(AtomicBool::new(false));
+        let (keepalive_turn, keepalive_key, keepalive_stop) = (turn.clone(), key.clone(), stop.clone());
+        std::thread::Builder::new().name("portputer-keepalive".into()).spawn(move || {
+            let mut seq = 0u32;
+            while !keepalive_stop.load(Ordering::Relaxed) {
+                let _ = keepalive_turn.send(&keepalive_key.seal(udp::KIND_KEEPALIVE, seq, &[]));
+                seq = seq.wrapping_add(1);
+                std::thread::sleep(Duration::from_millis(udp::KEEPALIVE_INTERVAL_MS));
+            }
+        })?;
+        let (recv_jitter, recv_stop, recv_arrived) = (jitter.clone(), stop.clone(), arrived.clone());
+        std::thread::Builder::new().name("portputer-audio-turn".into()).spawn(move || {
+            while !recv_stop.load(Ordering::Relaxed) {
+                let Some(packet) = turn.recv_timeout(Duration::from_millis(200)) else { continue };
+                if let Some((udp::KIND_AUDIO, seq, payload)) = key.open(&packet) {
+                    recv_arrived.store(true, Ordering::Relaxed);
+                    recv_jitter.lock().unwrap().push(seq, udp::decode_pcm(&payload));
+                }
+            }
+        })?;
+        let playback = audio::start_playback(jitter.clone())?;
+        *self.inner.jitter.lock().unwrap() = Some(jitter);
+        let watchdog = tokio::spawn(async move {
+            tokio::time::sleep(TURN_GRACE).await;
+            if !arrived.load(Ordering::Relaxed) {
+                let _ = fallback.send(TurnFallback::Audio);
+            }
+        });
+        Ok(AudioReceiver { stop, _playback: playback, task: Some(watchdog) })
+    }
+
+    /// Connects through the relay in the background, for Use Internet
+    /// Relay; the connection is sent on `found`.
+    fn switch_to_relay(&self, info: &ServerInfo, found: mpsc::Sender<Conn>) -> tokio::task::JoinHandle<()> {
+        let endpoint = self.relay_endpoint(info);
+        let (id, identity, name, store_dir, observer) = (info.id.clone(), self.identity.clone(), self.name.clone(), self.inner.store_dir.clone(), self.observer.clone());
+        tokio::spawn(async move {
+            let attempt = match endpoint {
+                Ok(endpoint) => {
+                    let store = ClientStore::new(&store_dir);
+                    tokio::time::timeout(Duration::from_secs(12), connect_once(&endpoint, Some(&id), &identity, &name, &store, false, None))
+                        .await
+                        .unwrap_or_else(|_| Err(Error::Protocol("the relay didn't answer".into())))
+                }
+                Err(e) => Err(e),
+            };
+            match attempt {
+                Ok(conn) if conn.info.trusted => {
+                    let _ = found.send(conn).await;
+                }
+                Ok(_) => {}
+                Err(e) => observer.event(SessionEvent::Error {
+                    code: errors::RELAY_FAILED.into(),
+                    message: format!("Couldn't connect through the internet relay. {e}"),
+                }),
+            }
+        })
+    }
+
     /// Tries the computer's direct addresses in the background; a trusted
     /// connection that answers is sent on `found`.
     fn try_direct(&self, info: &ServerInfo, found: mpsc::Sender<Conn>) -> tokio::task::JoinHandle<()> {
@@ -994,18 +1217,10 @@ impl Supervisor {
                 }
             }
         });
-        let mut resample = audio::ToMono48k::default();
-        let mut pending: Vec<f32> = Vec::new();
-        let mut seq = 0u32;
-        let capture = audio::start_input(move |samples, channels, rate| {
-            resample.push(samples, channels, rate, &mut pending);
-            while pending.len() >= udp::MIC_FRAMES {
-                let frame: Vec<i16> = pending.drain(..udp::MIC_FRAMES).map(|s| (s.clamp(-1.0, 1.0) * 32767.0) as i16).collect();
-                let _ = tx.send(key.seal(udp::KIND_MIC, seq, &udp::encode_pcm(&frame)));
-                seq = seq.wrapping_add(1);
-            }
+        let capture = record_mic(key, move |packet| {
+            let _ = tx.send(packet.to_vec());
         })?;
-        Ok(MicSender { _capture: capture, task: Some(task) })
+        Ok(MicSender { _capture: capture, task: Some(task), stop: None })
     }
 }
 
@@ -1018,10 +1233,16 @@ pub fn forget_server(store_dir: &std::path::Path, id: &str) -> Result<(), Error>
     ClientStore::new(store_dir).forget(id)
 }
 
+/// How long audio or the microphone waits for the first packet over TURN
+/// before using the relay's datagram connections instead.
+const TURN_GRACE: Duration = Duration::from_secs(3);
+
 /// This device's microphone, sent to the computer as it's recorded.
 struct MicSender {
     _capture: audio::Capture,
     task: Option<tokio::task::JoinHandle<()>>,
+    /// Over TURN: stops the thread watching for the server's keep-alives.
+    stop: Option<Arc<AtomicBool>>,
 }
 
 impl Drop for MicSender {
@@ -1029,7 +1250,52 @@ impl Drop for MicSender {
         if let Some(t) = self.task.take() {
             t.abort();
         }
+        if let Some(stop) = &self.stop {
+            stop.store(true, Ordering::Relaxed);
+        }
     }
+}
+
+/// Records the microphone into 5 ms packets for `send`.
+fn record_mic(key: PacketKey, send: impl Fn(&[u8]) + Send + 'static) -> Result<audio::Capture, Error> {
+    let mut resample = audio::ToMono48k::default();
+    let mut pending: Vec<f32> = Vec::new();
+    let mut seq = 0u32;
+    audio::start_input(move |samples, channels, rate| {
+        resample.push(samples, channels, rate, &mut pending);
+        while pending.len() >= udp::MIC_FRAMES {
+            let frame: Vec<i16> = pending.drain(..udp::MIC_FRAMES).map(|s| (s.clamp(-1.0, 1.0) * 32767.0) as i16).collect();
+            send(&key.seal(udp::KIND_MIC, seq, &udp::encode_pcm(&frame)));
+            seq = seq.wrapping_add(1);
+        }
+    })
+}
+
+/// The microphone over TURN. The server's keep-alives show the path works;
+/// without one within 3 seconds, `fallback` hears of it.
+fn start_mic_turn(turn: Arc<crate::turn::Allocation>, key: &str, fallback: mpsc::UnboundedSender<TurnFallback>) -> Result<MicSender, Error> {
+    let key = PacketKey::new(&hex::decode(key).ok().and_then(|k| k.try_into().ok()).ok_or_else(|| Error::Protocol("bad microphone key".into()))?);
+    let stop = Arc::new(AtomicBool::new(false));
+    let arrived = Arc::new(AtomicBool::new(false));
+    let (watch_turn, watch_key, watch_stop, watch_arrived) = (turn.clone(), key.clone(), stop.clone(), arrived.clone());
+    std::thread::Builder::new().name("portputer-mic-turn".into()).spawn(move || {
+        while !watch_stop.load(Ordering::Relaxed) {
+            let Some(packet) = watch_turn.recv_timeout(Duration::from_millis(200)) else { continue };
+            if let Some((udp::KIND_KEEPALIVE, _, _)) = watch_key.open(&packet) {
+                watch_arrived.store(true, Ordering::Relaxed);
+            }
+        }
+    })?;
+    let capture = record_mic(key, move |packet| {
+        let _ = turn.send(packet);
+    })?;
+    let watchdog = runtime().spawn(async move {
+        tokio::time::sleep(TURN_GRACE).await;
+        if !arrived.load(Ordering::Relaxed) {
+            let _ = fallback.send(TurnFallback::Mic);
+        }
+    });
+    Ok(MicSender { _capture: capture, task: Some(watchdog), stop: Some(stop) })
 }
 
 fn start_mic_sender(server: IpAddr, port: u16, key: &str) -> Result<MicSender, Error> {
@@ -1042,18 +1308,10 @@ fn start_mic_sender(server: IpAddr, port: u16, key: &str) -> Result<MicSender, E
     let socket = UdpSocket::bind((bind, 0))?;
     socket.connect((server, port))?;
     socket.set_nonblocking(true)?;
-    let mut resample = audio::ToMono48k::default();
-    let mut pending: Vec<f32> = Vec::new();
-    let mut seq = 0u32;
-    let capture = audio::start_input(move |samples, channels, rate| {
-        resample.push(samples, channels, rate, &mut pending);
-        while pending.len() >= udp::MIC_FRAMES {
-            let frame: Vec<i16> = pending.drain(..udp::MIC_FRAMES).map(|s| (s.clamp(-1.0, 1.0) * 32767.0) as i16).collect();
-            let _ = socket.send(&key.seal(udp::KIND_MIC, seq, &udp::encode_pcm(&frame)));
-            seq = seq.wrapping_add(1);
-        }
+    let capture = record_mic(key, move |packet| {
+        let _ = socket.send(packet);
     })?;
-    Ok(MicSender { _capture: capture, task: None })
+    Ok(MicSender { _capture: capture, task: None, stop: None })
 }
 
 /// Opens a transfer connection to the connected server and runs `op` on it.

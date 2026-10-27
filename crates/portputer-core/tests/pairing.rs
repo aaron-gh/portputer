@@ -189,7 +189,8 @@ fn transfers_files() {
 /// Through a running relay (PORTPUTER_RELAY_TEST_URL, such as
 /// http://127.0.0.1:8787 from `wrangler dev`): pair on the network, learn the
 /// relay, then connect, list files and stream audio through it alone; a
-/// made-up token and an unpaired device are refused.
+/// made-up token and an unpaired device are refused. With
+/// PORTPUTER_TURN_TEST (see tests/turn.rs) the audio goes over TURN.
 #[test]
 fn through_relay() {
     let Ok(url) = std::env::var("PORTPUTER_RELAY_TEST_URL") else {
@@ -287,6 +288,20 @@ fn through_relay() {
         }
     }
     assert!(moved, "moved off the relay: {:?}", moving.info());
+    // Use Internet Relay moves it back to the relay, and off again.
+    assert!(moving.relay_available());
+    let wait_for = |relayed: bool| {
+        (0..50).any(|_| {
+            std::thread::sleep(Duration::from_millis(100));
+            moving.info().is_some_and(|i| i.via_relay == relayed && i.trusted)
+        })
+    };
+    moving.set_use_relay(true);
+    assert!(wait_for(true), "moved to the relay: {:?}", moving.info());
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(moving.info().unwrap().via_relay, "stays on the relay");
+    moving.set_use_relay(false);
+    assert!(wait_for(false), "moved back: {:?}", moving.info());
     moving.close();
     std::thread::sleep(Duration::from_millis(200));
 

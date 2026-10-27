@@ -503,9 +503,13 @@ async fn serve(shared: Arc<Shared>, stream: transport::BoxStream, address: Optio
                 ClientMessage::ReleaseAll => {
                     let _ = shared.input.send(InputCommand::ReleaseAll);
                 }
-                ClientMessage::AudioStart { mute } => {
+                ClientMessage::AudioStart { mute, turn } => {
                     audio = None;
-                    match shared.audio.subscribe(client_ip, client_id.clone(), mute) {
+                    let turn = match (client_ip, turn) {
+                        (None, Some(peer)) => turn_to(&shared, &peer).await,
+                        _ => None,
+                    };
+                    match shared.audio.subscribe(client_ip, client_id.clone(), mute, turn) {
                         Ok((sub, ready, mute_result)) => {
                             audio = Some(sub);
                             writer.send(&ready).await?;
@@ -528,9 +532,13 @@ async fn serve(shared: Arc<Shared>, stream: transport::BoxStream, address: Optio
                         writer.send(&ServerMessage::Error { code: errors::MUTE_FAILED.into(), message }).await?;
                     }
                 }
-                ClientMessage::MicStart => {
+                ClientMessage::MicStart { turn } => {
                     mic = None;
-                    match start_microphone(client_ip, &client_id, &shared.mic_inputs) {
+                    let turn = match (client_ip, turn) {
+                        (None, Some(peer)) => turn_to(&shared, &peer).await,
+                        _ => None,
+                    };
+                    match start_microphone(client_ip, &client_id, &shared.mic_inputs, turn) {
                         Ok((sink, ready)) => {
                             mic = Some(sink);
                             writer.send(&ready).await?;
@@ -689,6 +697,29 @@ fn microphone_available() -> bool {
 
 type MicInputs = Mutex<HashMap<String, (PacketKey, Arc<Mutex<crate::jitter::JitterBuffer>>)>>;
 
+/// The computer's end of a TURN path to a relayed client's relayed
+/// address: credentials from the relay, an allocation, and a channel bound
+/// to the client. None when any of it fails; the client then uses a
+/// datagram connection.
+async fn turn_to(shared: &Arc<Shared>, peer: &str) -> Option<Arc<crate::turn::Allocation>> {
+    let peer: SocketAddr = peer.parse().ok()?;
+    let home = shared.store.relay_home();
+    let setup = tokio::task::spawn_blocking(move || -> Result<crate::turn::Allocation, Error> {
+        let credentials = crate::relay::turn_credentials_for_home(&home)?;
+        let allocation = crate::turn::Allocation::new(&credentials)?;
+        allocation.bind(peer)?;
+        Ok(allocation)
+    });
+    match tokio::time::timeout(Duration::from_secs(5), setup).await {
+        Ok(Ok(Ok(allocation))) => Some(Arc::new(allocation)),
+        Ok(Ok(Err(e))) => {
+            tracing::info!("TURN not used: {e}");
+            None
+        }
+        _ => None,
+    }
+}
+
 /// A client's microphone, played into the Portputer Microphone driver.
 struct MicSink {
     stop: Arc<std::sync::atomic::AtomicBool>,
@@ -752,19 +783,43 @@ fn microphone_output(jitter: Arc<Mutex<crate::jitter::JitterBuffer>>) -> Result<
 }
 
 /// A client's microphone: over UDP from `client_ip`, or for a relayed
-/// client (no address), through its datagram connection.
-fn start_microphone(client_ip: Option<std::net::IpAddr>, client_id: &str, inputs: &Arc<MicInputs>) -> Result<(MicSink, ServerMessage), Error> {
+/// client (no address), over TURN or its datagram connection.
+fn start_microphone(
+    client_ip: Option<std::net::IpAddr>,
+    client_id: &str,
+    inputs: &Arc<MicInputs>,
+    turn: Option<Arc<crate::turn::Allocation>>,
+) -> Result<(MicSink, ServerMessage), Error> {
     let jitter = Arc::new(Mutex::new(crate::jitter::JitterBuffer::new(udp::MIC_RATE, 1, udp::MIC_FRAMES as u32, 0)));
     let output = microphone_output(jitter.clone())?;
     let Some(client_ip) = client_ip else {
         let (key_bytes, key) = PacketKey::random();
-        inputs.lock().unwrap().insert(client_id.to_string(), (key, jitter));
-        let sink = MicSink {
-            stop: Default::default(),
-            _output: output,
-            relayed: Some((inputs.clone(), client_id.to_string())),
-        };
-        return Ok((sink, ServerMessage::MicReady { port: 0, key: hex::encode(key_bytes) }));
+        // The datagram connection stays possible: the client falls back to
+        // it when nothing comes over TURN.
+        inputs.lock().unwrap().insert(client_id.to_string(), (key.clone(), jitter.clone()));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let relayed_address = turn.as_ref().map(|t| t.relayed().to_string());
+        if let Some(turn) = turn {
+            let stopped = stop.clone();
+            std::thread::Builder::new().name("portputer-mic-turn".into()).spawn(move || {
+                // Keep-alives the other way show the client the path works.
+                let mut last_keepalive = Instant::now() - Duration::from_secs(1);
+                let mut seq = 0u32;
+                while !stopped.load(Ordering::Relaxed) {
+                    if last_keepalive.elapsed() >= Duration::from_millis(udp::KEEPALIVE_INTERVAL_MS) {
+                        let _ = turn.send(&key.seal(udp::KIND_KEEPALIVE, seq, &[]));
+                        seq = seq.wrapping_add(1);
+                        last_keepalive = Instant::now();
+                    }
+                    let Some(packet) = turn.recv_timeout(Duration::from_millis(100)) else { continue };
+                    if let Some((udp::KIND_MIC, seq, payload)) = key.open(&packet) {
+                        jitter.lock().unwrap().push(seq, udp::decode_pcm(&payload));
+                    }
+                }
+            })?;
+        }
+        let sink = MicSink { stop, _output: output, relayed: Some((inputs.clone(), client_id.to_string())) };
+        return Ok((sink, ServerMessage::MicReady { port: 0, key: hex::encode(key_bytes), turn: relayed_address }));
     };
     let socket = UdpSocket::bind(("0.0.0.0", 0))?;
     socket.set_read_timeout(Some(Duration::from_millis(500)))?;
@@ -784,7 +839,7 @@ fn start_microphone(client_ip: Option<std::net::IpAddr>, client_id: &str, inputs
             }
         }
     })?;
-    Ok((MicSink { stop, _output: output, relayed: None }, ServerMessage::MicReady { port, key: hex::encode(key_bytes) }))
+    Ok((MicSink { stop, _output: output, relayed: None }, ServerMessage::MicReady { port, key: hex::encode(key_bytes), turn: None }))
 }
 
 /// One client's audio stream: its own UDP socket, key and sequence numbers.
@@ -792,10 +847,12 @@ struct Subscriber {
     id: u64,
     socket: UdpSocket,
     key: PacketKey,
-    /// None for a relayed client, whose packets go on its datagram connection.
+    /// None for a relayed client, whose packets go over TURN or on its
+    /// datagram connection.
     client_ip: Option<std::net::IpAddr>,
     client_id: String,
     relay_tx: Mutex<Option<tokio::sync::mpsc::Sender<Vec<u8>>>>,
+    turn: Option<Arc<crate::turn::Allocation>>,
     dest: Mutex<Option<(SocketAddr, Instant)>>,
     seq: AtomicU32,
     closed: std::sync::atomic::AtomicBool,
@@ -859,7 +916,13 @@ struct AudioHub(Arc<HubInner>);
 
 impl AudioHub {
     #[allow(clippy::type_complexity)]
-    fn subscribe(&self, client_ip: Option<std::net::IpAddr>, client_id: String, mute: bool) -> Result<(AudioSubscription, ServerMessage, Result<(), String>), Error> {
+    fn subscribe(
+        &self,
+        client_ip: Option<std::net::IpAddr>,
+        client_id: String,
+        mute: bool,
+        turn: Option<Arc<crate::turn::Allocation>>,
+    ) -> Result<(AudioSubscription, ServerMessage, Result<(), String>), Error> {
         let inner = self.0.clone();
         let mut state = inner.state.lock().unwrap();
         if state.capture.is_none() {
@@ -896,6 +959,7 @@ impl AudioHub {
             client_ip,
             client_id,
             relay_tx: Mutex::new(None),
+            turn,
             dest: Mutex::new(None),
             seq: AtomicU32::new(0),
             closed: Default::default(),
@@ -904,6 +968,7 @@ impl AudioHub {
         state.subscribers.push(subscriber.clone());
         let mute_result = apply_mute(&mut state);
         let (rate, channels, frames) = state.format;
+        let turn = subscriber.turn.as_ref().map(|t| t.relayed().to_string());
         drop(state);
         if client_ip.is_some() {
             let listener = subscriber.clone();
@@ -911,7 +976,7 @@ impl AudioHub {
         }
         Ok((
             AudioSubscription { hub: inner, subscriber },
-            ServerMessage::AudioReady { port, key: hex::encode(key_bytes), sample_rate: rate, channels, frames },
+            ServerMessage::AudioReady { port, key: hex::encode(key_bytes), sample_rate: rate, channels, frames, turn },
             mute_result,
         ))
     }
@@ -958,11 +1023,18 @@ fn send_thread(hub: Arc<HubInner>, rx: std::sync::mpsc::Receiver<Vec<i16>>, fram
             let packet: Vec<i16> = carry.drain(..samples_per_packet).collect();
             let payload = udp::encode_pcm(&packet);
             for sub in &subscribers {
+                // The datagram connection when the client opened one (TURN
+                // didn't work for it), then TURN.
                 let relay = sub.relay_tx.lock().unwrap().clone();
                 if let Some(tx) = relay {
                     let seq = sub.seq.fetch_add(1, Ordering::Relaxed);
                     // Dropped, not queued, when the relay falls behind.
                     let _ = tx.try_send(sub.key.seal(udp::KIND_AUDIO, seq, &payload));
+                    continue;
+                }
+                if let Some(turn) = &sub.turn {
+                    let seq = sub.seq.fetch_add(1, Ordering::Relaxed);
+                    let _ = turn.send(&sub.key.seal(udp::KIND_AUDIO, seq, &payload));
                     continue;
                 }
                 let dest = *sub.dest.lock().unwrap();

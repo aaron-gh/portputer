@@ -55,6 +55,9 @@ final class ClientModel: ObservableObject {
     @Published private(set) var audioWanted = false
     @Published private(set) var micWanted = false
     @Published private(set) var micOn = false
+    /// Use Internet Relay: off for each connection.
+    @Published private(set) var useRelay = false
+    @Published private(set) var relayAvailable = false
     @Published var message = ""
     @Published var volume: Double = UserDefaults.standard.object(forKey: "clientVolume") as? Double ?? 1 {
         didSet {
@@ -197,6 +200,7 @@ final class ClientModel: ObservableObject {
     fileprivate func connected(_ info: ServerInfo) {
         let wasTrusted = self.info?.trusted ?? false
         state = .connected(info)
+        relayAvailable = session?.relayAvailable() ?? false
         if info.trusted && !wasTrusted {
             refresh()
             if info.audio { setAudio(true) }
@@ -212,6 +216,8 @@ final class ClientModel: ObservableObject {
         audioWanted = false
         micWanted = false
         micOn = false
+        useRelay = false
+        relayAvailable = false
         state = .idle
     }
 
@@ -248,6 +254,11 @@ final class ClientModel: ObservableObject {
     func setMic(_ on: Bool) {
         micWanted = on
         on ? session?.startMic() : session?.stopMic()
+    }
+
+    func setUseRelay(_ on: Bool) {
+        useRelay = on
+        session?.setUseRelay(on: on)
     }
 
     func key(_ code: String, down: Bool, repeat isRepeat: Bool = false) {
@@ -351,6 +362,7 @@ final class ClientModel: ObservableObject {
                 m.session = nil
                 m.audioOn = false
                 m.audioWanted = false
+                m.useRelay = false
                 m.state = .closed("Disconnected from \(name). \(reason)")
                 announce("Disconnected from \(name).")
             }
@@ -362,6 +374,7 @@ final class ClientModel: ObservableObject {
             onMain { m in
                 if code == "audio_failed" { m.audioWanted = false }
                 if code == "mic_failed" { m.micWanted = false }
+                if code == "relay_failed" { m.useRelay = false }
                 m.message = message
                 announce(message)
             }

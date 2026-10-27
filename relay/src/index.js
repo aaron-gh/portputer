@@ -19,6 +19,11 @@
 //   GET /status/<room>?token=<t>
 //       For a paired device: {"online": true} while the computer listens.
 //       Plain HTTP, so devices can show which computers they can reach.
+//   GET /turn/<room>?token=<t> or ?key=<k>
+//       Short-lived credentials for Cloudflare's TURN service, for a paired
+//       device or the computer: {"urls":[...],"username":...,"credential":...}.
+//       Audio and microphone packets go through TURN as UDP. Needs the
+//       TURN_KEY_ID and TURN_KEY_API_TOKEN secrets; without them, 404.
 //
 // Bytes are passed through as they are. Portputer's own encryption (Noise)
 // runs inside, end to end: the relay sees only ciphertext.
@@ -38,10 +43,10 @@ export default {
       return new Response("Portputer relay\n");
     }
     const [kind, room] = parts;
-    if (!["listen", "connect", "accept", "status"].includes(kind) || !/^[0-9a-f]{64}$/.test(room ?? "")) {
+    if (!["listen", "connect", "accept", "status", "turn"].includes(kind) || !/^[0-9a-f]{64}$/.test(room ?? "")) {
       return NOT_FOUND();
     }
-    if (kind !== "status" && request.headers.get("Upgrade") !== "websocket") {
+    if (kind !== "status" && kind !== "turn" && request.headers.get("Upgrade") !== "websocket") {
       return new Response("WebSocket only\n", { status: 426 });
     }
     return env.ROOMS.get(env.ROOMS.idFromName(room)).fetch(request);
@@ -49,8 +54,9 @@ export default {
 };
 
 export class Room {
-  constructor(state) {
+  constructor(state, env) {
     this.state = state;
+    this.env = env;
     // Messages from a device before the computer's end of its connection
     // arrives, by connection.
     this.waiting = new Map();
@@ -73,6 +79,9 @@ export class Room {
       if (!token || !allowed.includes(await sha256(token))) return NOT_FOUND();
       const online = this.state.getWebSockets("listen").length > 0;
       return new Response(JSON.stringify({ online }), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
+    }
+    if (kind === "turn") {
+      return this.turn(url);
     }
     const { 0: outside, 1: inside } = new WebSocketPair();
 
@@ -117,6 +126,32 @@ export class Room {
       return NOT_FOUND();
     }
     return new Response(null, { status: 101, webSocket: outside });
+  }
+
+  /** TURN credentials for the computer (its key) or a paired device. */
+  async turn(url) {
+    const { TURN_KEY_ID, TURN_KEY_API_TOKEN } = this.env;
+    if (!TURN_KEY_ID || !TURN_KEY_API_TOKEN) return NOT_FOUND();
+    const key = url.searchParams.get("key");
+    const token = url.searchParams.get("token");
+    let allowed = false;
+    if (key) {
+      allowed = await this.keyMatches(key);
+    } else if (token) {
+      allowed = ((await this.state.storage.get("allow")) ?? []).includes(await sha256(token));
+    }
+    if (!allowed) return NOT_FOUND();
+    const response = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${TURN_KEY_ID}/credentials/generate-ice-servers`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TURN_KEY_API_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ ttl: 86400 }),
+    });
+    if (!response.ok) return new Response("TURN credentials unavailable\n", { status: 502 });
+    const { iceServers } = await response.json();
+    const server = [iceServers].flat().find((s) => s && s.username);
+    if (!server) return new Response("TURN credentials unavailable\n", { status: 502 });
+    const body = { urls: [server.urls].flat(), username: server.username, credential: server.credential };
+    return new Response(JSON.stringify(body), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
   }
 
   /** The other end of a relayed connection, if it's there. */

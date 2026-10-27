@@ -48,9 +48,9 @@ A man in the middle has a different `h` with each side, so can't produce either 
 | `paired` | `proof` |
 | `error` | `code`, `message` |
 | `notice` | `code`, `message` (such as a missing permission on the server) |
-| `audio_ready` | `port` (UDP), `key` (hex, 32 bytes), `sample_rate`, `channels`, `frames` (per packet) |
+| `audio_ready` | `port` (UDP), `key` (hex, 32 bytes), `sample_rate`, `channels`, `frames` (per packet), `turn` (optional: the server's relayed address at the TURN service) |
 | `audio_stopped` | `reason` |
-| `mic_ready` | `port` (UDP), `key` (hex, 32 bytes) |
+| `mic_ready` | `port` (UDP), `key` (hex, 32 bytes), `turn` (optional, as for `audio_ready`) |
 | `mic_stopped` | `reason` |
 | `relay` | `url`, `room`, `token`: the server's room at the internet relay and this client's token there; sent to paired clients only |
 | `addresses` | `addresses`, `port`: every address the server has (local network, Tailscale and other VPNs); sent to paired clients only |
@@ -70,18 +70,18 @@ The speakers are muted while any client streaming audio asks for it, and unmuted
 | `tap` | `code`, `modifiers` (codes held while the key is pressed and released) |
 | `text` | `text` (typed as Unicode, independent of keyboard layout) |
 | `release_all` | |
-| `audio_start` | `mute` (optional): keep the sound from the computer's speakers while it streams |
+| `audio_start` | `mute` (optional): keep the sound from the computer's speakers while it streams; `turn` (optional, relayed clients): the client's relayed address at the TURN service |
 | `audio_stop` | |
 | `mute_speakers` | `muted` |
 | `clipboard_watch` | `on`: the server sends its clipboard as it changes |
 | `clipboard_text` | `text`: put on the server's clipboard |
-| `mic_start` / `mic_stop` | the client's microphone, to the server's Portputer Microphone |
+| `mic_start` / `mic_stop` | the client's microphone, to the server's Portputer Microphone; `mic_start` takes `turn` as `audio_start` does |
 | `power` | `action`: `restart`, `shutdown`, `sleep`, `log_out`, `lock`, `force_restart`, `unlocked_restart`; `user` and `password` for `unlocked_restart` |
 | `ping` | `n`, every 5 seconds |
 
 Keys are W3C `KeyboardEvent.code` values: the physical key, not the character. The server's system applies its own keyboard layout. `crates/portputer-core/src/keys.rs` maps each code to Linux input codes (Android scan codes), Android key codes, macOS virtual key codes and Windows scan codes or virtual keys. Codes Portputer adds: `Fn`, `BrightnessUp`, `BrightnessDown`, `KeyboardBacklightUp`, `KeyboardBacklightDown`, `MissionControl`, `Launchpad`, `Eject`.
 
-The server releases every key a client holds when it disconnects. A client connecting to a paired server tries, all at once, the address it was given, the last one that worked and every address from `addresses`; the first to answer wins. Only if none does, it uses the relay. The client reconnects for up to 20 minutes after an unexpected disconnect, to the server's current announcement (user session first, then login window) or its last address, and drops key events while disconnected.
+The server releases every key a client holds when it disconnects. A client connecting to a paired server tries, all at once, the address it was given, the last one that worked and every address from `addresses`; the first to answer wins. Only if none does, it uses the relay. A relayed connection moves to a direct one when an address answers, unless Use Internet Relay is on; turning it on moves a direct connection to the relay (off for each new session). The client reconnects for up to 20 minutes after an unexpected disconnect, to the server's current announcement (user session first, then login window) or its last address, and drops key events while disconnected.
 
 ## Audio
 
@@ -114,4 +114,6 @@ Errors are `error` `message`. Received file names keep only their last component
 
 `relay/README.md` describes the relay's endpoints. A relayed connection is a byte stream like TCP, so the handshake and everything after it are the same; the relay sees only Noise ciphertext. A client connects through the relay when the server isn't reachable directly and it has the server's room and its token from a `relay` message. The server makes its room (256 random bits) and room key once, and a token per paired client at pairing; it keeps the relay's list of allowed token hashes current.
 
-UDP isn't available through the relay. A relayed client opens a datagram connection instead: a further relayed connection with `"datagram": "audio"` or `"datagram": "mic"` in the hello, on which each data frame is one packet, sealed with the stream's packet key as over UDP. `audio_ready` and `mic_ready` have port 0 for relayed clients.
+A relayed client's audio and microphone packets go over TURN when the relay has it (`/turn/<room>` gives credentials): the client allocates a relayed address at the TURN service and sends it as `turn` in `audio_start` or `mic_start`; the server allocates its own, binds a channel (0x4000) to the client's and answers with its address as `turn` in `audio_ready` or `mic_ready`; the client binds a channel to that. Packets are the same sealed packets as over UDP, sent as ChannelData. The client sends keep-alives over audio's path, and the server over the microphone's, so the other end can tell the path works.
+
+Otherwise, or when nothing arrives over TURN within 3 seconds (the client then starts the stream again without `turn`, and doesn't try TURN again in that session), a relayed client opens a datagram connection: a further relayed connection with `"datagram": "audio"` or `"datagram": "mic"` in the hello, on which each data frame is one packet, sealed with the stream's packet key as over UDP. `audio_ready` and `mic_ready` have port 0 for relayed clients.
