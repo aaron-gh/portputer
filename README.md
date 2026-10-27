@@ -41,7 +41,7 @@ Portputer is in the menu bar. The menu shows the version.
   - Paired Devices: the devices paired with this Mac, with Remove for each.
   - Internet Relay: reach this Mac from other networks (on by default).
   - Microphone: installs the Portputer Microphone driver. Installing or removing it stops all sound for a moment.
-  - Login Window: installs support for typing at the login window after a restart, before anyone logs in, and for Force Restart and Restart Without FileVault Unlock. With FileVault on, a normal restart stops at the FileVault unlock screen, where nothing can be controlled remotely; Restart Without FileVault Unlock skips it once.
+  - Login Window: installs support for typing at the login window after a restart, before anyone logs in, and for Force Restart and Restart Without FileVault Unlock. With FileVault on, a normal restart stops at the FileVault unlock screen, where nothing can be controlled remotely; Restart Without FileVault Unlock skips it once. Computer Audio isn't available at the login window: macOS allows recording system audio only in a logged-in session.
   - About: the version.
 
 Needs macOS 14.2 or later. Installing the microphone driver or login window support asks for an administrator's password.

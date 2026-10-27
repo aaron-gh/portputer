@@ -392,8 +392,8 @@ async fn serve(shared: Arc<Shared>, stream: transport::BoxStream, address: Optio
             paired,
             version: env!("CARGO_PKG_VERSION").into(),
             power: platform::power_actions(shared.session),
-            audio: cfg!(any(target_os = "macos", windows)),
-            mute: platform::can_mute_speakers(),
+            audio: audio_available(shared.session),
+            mute: audio_available(shared.session) && platform::can_mute_speakers(),
             mic: microphone_available(),
             files: files_available(shared.session),
         })
@@ -502,6 +502,14 @@ async fn serve(shared: Arc<Shared>, stream: transport::BoxStream, address: Optio
                 }
                 ClientMessage::ReleaseAll => {
                     let _ = shared.input.send(InputCommand::ReleaseAll);
+                }
+                ClientMessage::AudioStart { .. } if !audio_available(shared.session) => {
+                    writer
+                        .send(&ServerMessage::Error {
+                            code: errors::AUDIO_FAILED.into(),
+                            message: "Computer Audio isn't available at the login window: macOS allows recording system audio only in a logged-in user's session.".into(),
+                        })
+                        .await?;
                 }
                 ClientMessage::AudioStart { mute, turn } => {
                     audio = None;
@@ -696,6 +704,15 @@ fn microphone_available() -> bool {
 }
 
 type MicInputs = Mutex<HashMap<String, (PacketKey, Arc<Mutex<crate::jitter::JitterBuffer>>)>>;
+
+/// Whether this server can send the computer's audio. At the Mac login
+/// window it can't: Core Audio taps need the System Audio Recording
+/// permission, which nobody can grant the login window's server (it runs as
+/// root), so the tap records silence. The test tone needs no tap.
+fn audio_available(session: SessionKind) -> bool {
+    cfg!(windows)
+        || (cfg!(target_os = "macos") && (session == SessionKind::User || std::env::var_os("PORTPUTER_TEST_TONE").is_some()))
+}
 
 /// The computer's end of a TURN path to a relayed client's relayed
 /// address: credentials from the relay, an allocation, and a channel bound
