@@ -53,6 +53,13 @@ final class ClientModel: ObservableObject {
         }
     }
 
+    @Published var muteSpeakers: Bool = UserDefaults.standard.bool(forKey: "clientMuteSpeakers") {
+        didSet {
+            UserDefaults.standard.set(muteSpeakers, forKey: "clientMuteSpeakers")
+            session?.setSpeakersMuted(muted: muteSpeakers)
+        }
+    }
+
     private var session: ClientSession?
     private var discovery: Discovery?
     private var ads: [String: Advertisement] = [:]
@@ -136,6 +143,7 @@ final class ClientModel: ObservableObject {
                     }
                     model.session = s
                     s.setVolume(volume: Float(model.volume))
+                    s.setSpeakersMuted(muted: model.muteSpeakers)
                     s.setLatencyMs(ms: 40)
                     if let info = s.info() { model.connected(info) }
                 }

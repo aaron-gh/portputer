@@ -270,6 +270,7 @@ async fn serve(shared: Arc<Shared>, stream: tokio::net::TcpStream, address: Sock
             version: env!("CARGO_PKG_VERSION").into(),
             power: platform::power_actions(shared.session),
             audio: cfg!(any(target_os = "macos", windows)),
+            mute: platform::can_mute_speakers(),
         })
         .await?;
     if paired && !platform::input_allowed(false) {
@@ -348,17 +349,29 @@ async fn serve(shared: Arc<Shared>, stream: tokio::net::TcpStream, address: Sock
                 ClientMessage::ReleaseAll => {
                     let _ = shared.input.send(InputCommand::ReleaseAll);
                 }
-                ClientMessage::AudioStart => {
+                ClientMessage::AudioStart { mute } => {
                     audio = None;
-                    match shared.audio.subscribe(address.ip()) {
-                        Ok((sub, ready)) => {
+                    match shared.audio.subscribe(address.ip(), mute) {
+                        Ok((sub, ready, mute_result)) => {
                             audio = Some(sub);
                             writer.send(&ready).await?;
+                            if let Err(message) = mute_result {
+                                writer.send(&ServerMessage::Error { code: errors::MUTE_FAILED.into(), message }).await?;
+                            }
                         }
                         Err(e) => {
                             shared.emit(ServerEvent::AudioFailed { message: e.to_string() });
                             writer.send(&ServerMessage::Error { code: errors::AUDIO_FAILED.into(), message: e.to_string() }).await?;
                         }
+                    }
+                }
+                ClientMessage::MuteSpeakers { muted } => {
+                    let result = match &audio {
+                        Some(sub) => sub.set_mute(muted),
+                        None => Ok(()),
+                    };
+                    if let Err(message) = result {
+                        writer.send(&ServerMessage::Error { code: errors::MUTE_FAILED.into(), message }).await?;
                     }
                 }
                 ClientMessage::AudioStop => {
@@ -416,6 +429,8 @@ struct Subscriber {
     dest: Mutex<Option<(SocketAddr, Instant)>>,
     seq: AtomicU32,
     closed: std::sync::atomic::AtomicBool,
+    /// This client wants the computer's speakers muted while it listens.
+    mute: std::sync::atomic::AtomicBool,
 }
 
 struct AudioSubscription {
@@ -428,10 +443,30 @@ impl Drop for AudioSubscription {
         self.subscriber.closed.store(true, Ordering::Relaxed);
         let mut state = self.hub.state.lock().unwrap();
         state.subscribers.retain(|s| s.id != self.subscriber.id);
+        // Unmuted before the capture stops, so the speakers come back.
+        let _ = apply_mute(&mut state);
         if state.subscribers.is_empty() {
             state.capture = None;
         }
     }
+}
+
+impl AudioSubscription {
+    fn set_mute(&self, mute: bool) -> Result<(), String> {
+        self.subscriber.mute.store(mute, Ordering::Relaxed);
+        apply_mute(&mut self.hub.state.lock().unwrap())
+    }
+}
+
+/// The speakers are muted while anyone listening asks for it.
+fn apply_mute(state: &mut HubState) -> Result<(), String> {
+    let want = state.capture.is_some() && state.subscribers.iter().any(|s| s.mute.load(Ordering::Relaxed));
+    if want == state.muted {
+        return Ok(());
+    }
+    platform::set_speakers_muted(want)?;
+    state.muted = want;
+    Ok(())
 }
 
 #[derive(Default)]
@@ -440,6 +475,7 @@ struct HubState {
     capture: Option<Capture>,
     format: (u32, u16, u32),
     next_id: u64,
+    muted: bool,
 }
 
 #[derive(Default)]
@@ -452,7 +488,8 @@ struct HubInner {
 struct AudioHub(Arc<HubInner>);
 
 impl AudioHub {
-    fn subscribe(&self, client_ip: std::net::IpAddr) -> Result<(AudioSubscription, ServerMessage), Error> {
+    #[allow(clippy::type_complexity)]
+    fn subscribe(&self, client_ip: std::net::IpAddr, mute: bool) -> Result<(AudioSubscription, ServerMessage, Result<(), String>), Error> {
         let inner = self.0.clone();
         let mut state = inner.state.lock().unwrap();
         if state.capture.is_none() {
@@ -490,8 +527,10 @@ impl AudioHub {
             dest: Mutex::new(None),
             seq: AtomicU32::new(0),
             closed: Default::default(),
+            mute: std::sync::atomic::AtomicBool::new(mute),
         });
         state.subscribers.push(subscriber.clone());
+        let mute_result = apply_mute(&mut state);
         let (rate, channels, frames) = state.format;
         drop(state);
         let listener = subscriber.clone();
@@ -499,6 +538,7 @@ impl AudioHub {
         Ok((
             AudioSubscription { hub: inner, subscriber },
             ServerMessage::AudioReady { port, key: hex::encode(key_bytes), sample_rate: rate, channels, frames },
+            mute_result,
         ))
     }
 }

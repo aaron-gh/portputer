@@ -122,6 +122,13 @@
                     android:minHeight="48dp"
                     android:text="@string/audio_switch" />
 
+                <Switch
+                    android:id="@+id/mute_speakers"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:text="@string/mute_speakers_switch" />
+
                 <TextView
                     android:id="@+id/volume_label"
                     android:layout_width="match_parent"

@@ -117,6 +117,29 @@ pub fn power(session: SessionKind, action: PowerAction, user: Option<&str>, pass
     }
 }
 
+/// Whether this system can keep the sound from its speakers while streaming it.
+pub fn can_mute_speakers() -> bool {
+    cfg!(any(target_os = "macos", windows))
+}
+
+/// Mutes or unmutes the computer's speakers while its sound is captured: on
+/// a Mac the capture tap's mute, so the stream keeps the sound; on Windows
+/// the output device's mute, put back as it was afterwards.
+pub fn set_speakers_muted(muted: bool) -> Result<(), String> {
+    if std::env::var_os("PORTPUTER_TEST_TONE").is_some() {
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    return macos::set_speakers_muted(muted);
+    #[cfg(windows)]
+    return windows::set_speakers_muted(muted);
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        let _ = muted;
+        Err("not supported on this system".into())
+    }
+}
+
 /// The name of the user logged in at the console, if any.
 pub fn console_user() -> String {
     #[cfg(target_os = "macos")]

@@ -139,6 +139,10 @@ struct ClientView: View {
             .frame(height: 1)
             Toggle("Computer Audio", isOn: Binding(get: { model.audioWanted }, set: { model.setAudio($0) }))
                 .disabled(!info.audio)
+            if info.mute {
+                Toggle("Mute Computer Speakers", isOn: $model.muteSpeakers)
+                    .disabled(!info.audio)
+            }
             Slider(value: $model.volume, in: 0...1) { Text("Audio volume") }
                 .disabled(!info.audio)
             HStack {

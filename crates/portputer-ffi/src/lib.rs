@@ -283,6 +283,8 @@ pub struct ServerInfo {
     pub version: String,
     pub power: Vec<Power>,
     pub audio: bool,
+    /// The computer's speakers can be muted while it streams.
+    pub mute: bool,
     pub host: String,
     pub port: u16,
     /// Paired both ways. Until it is, only `pair` does anything.
@@ -300,6 +302,7 @@ impl From<client::ServerInfo> for ServerInfo {
             version: i.version,
             power: i.power.into_iter().map(Power::from).collect(),
             audio: i.audio,
+            mute: i.mute,
             host: i.host,
             port: i.port,
             trusted: i.trusted,
@@ -401,6 +404,11 @@ impl ClientSession {
 
     pub fn stop_audio(&self) {
         self.session.stop_audio();
+    }
+
+    /// Keeps the sound from the computer's own speakers while it streams.
+    pub fn set_speakers_muted(&self, muted: bool) {
+        self.session.set_speakers_muted(muted);
     }
 
     pub fn set_volume(&self, volume: f32) {

@@ -44,7 +44,7 @@ A man in the middle has a different `h` with each side, so can't produce either 
 
 | Type | Fields |
 |---|---|
-| `welcome` | `server_id`, `name`, `os`, `session`, `user`, `paired`, `version`, `power` (actions available), `audio` (bool) |
+| `welcome` | `server_id`, `name`, `os`, `session`, `user`, `paired`, `version`, `power` (actions available), `audio` (bool), `mute` (bool: speakers can be muted while streaming) |
 | `paired` | `proof` |
 | `error` | `code`, `message` |
 | `notice` | `code`, `message` (such as a missing permission on the server) |
@@ -52,7 +52,9 @@ A man in the middle has a different `h` with each side, so can't produce either 
 | `audio_stopped` | `reason` |
 | `pong` | `n` |
 
-Error codes: `not_paired`, `pairing_failed`, `no_pairing_code`, `unsupported`, `power_failed`, `audio_failed`, `bad_message`, `version`.
+Error codes: `not_paired`, `pairing_failed`, `no_pairing_code`, `unsupported`, `power_failed`, `audio_failed`, `mute_failed`, `bad_message`, `version`.
+
+The speakers are muted while any client streaming audio asks for it, and unmuted when none does or the stream stops.
 
 ### Messages from the client
 
@@ -62,7 +64,9 @@ Error codes: `not_paired`, `pairing_failed`, `no_pairing_code`, `unsupported`, `
 | `tap` | `code`, `modifiers` (codes held while the key is pressed and released) |
 | `text` | `text` (typed as Unicode, independent of keyboard layout) |
 | `release_all` | |
-| `audio_start` / `audio_stop` | |
+| `audio_start` | `mute` (optional): keep the sound from the computer's speakers while it streams |
+| `audio_stop` | |
+| `mute_speakers` | `muted` |
 | `power` | `action`: `restart`, `shutdown`, `sleep`, `log_out`, `lock`, `force_restart`, `unlocked_restart`; `user` and `password` for `unlocked_restart` |
 | `ping` | `n`, every 5 seconds |
 

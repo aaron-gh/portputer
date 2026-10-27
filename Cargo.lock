@@ -1273,6 +1273,7 @@ dependencies = [
  "ndk",
  "objc2",
  "objc2-app-kit",
+ "objc2-core-audio",
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-foundation",
@@ -1284,6 +1285,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "windows",
  "windows-sys",
 ]
 

@@ -55,8 +55,14 @@ pub enum ClientMessage {
     Tap { code: String, modifiers: Vec<String> },
     Text { text: String },
     ReleaseAll,
-    AudioStart,
+    /// `mute` keeps the sound from the computer's own speakers while it
+    /// streams.
+    AudioStart {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        mute: bool,
+    },
     AudioStop,
+    MuteSpeakers { muted: bool },
     Power {
         action: PowerAction,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -82,6 +88,9 @@ pub enum ServerMessage {
         /// The power actions this server can carry out.
         power: Vec<PowerAction>,
         audio: bool,
+        /// Whether the computer's speakers can be muted while it streams.
+        #[serde(default)]
+        mute: bool,
     },
     /// The server's half of the pairing proof: "server" and the handshake
     /// hash.
@@ -109,6 +118,7 @@ pub mod errors {
     pub const UNSUPPORTED: &str = "unsupported";
     pub const POWER_FAILED: &str = "power_failed";
     pub const AUDIO_FAILED: &str = "audio_failed";
+    pub const MUTE_FAILED: &str = "mute_failed";
     pub const BAD_MESSAGE: &str = "bad_message";
     pub const VERSION: &str = "version";
 }

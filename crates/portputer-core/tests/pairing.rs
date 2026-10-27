@@ -95,6 +95,7 @@ fn streams_audio() {
     let code = server.new_pairing_code();
     session.pair(&code).unwrap();
     session.set_volume(0.0);
+    session.set_speakers_muted(true);
     session.start_audio();
     std::thread::sleep(Duration::from_millis(1500));
     let started = events.0.lock().unwrap().iter().any(|e| matches!(e, SessionEvent::AudioStarted { sample_rate: 48000 }));
@@ -104,6 +105,7 @@ fn streams_audio() {
     // 5 ms packets for about a second.
     assert!(stats.received > 150, "{stats:?}");
     assert_eq!(stats.late, 0);
+    session.set_speakers_muted(false);
     session.stop_audio();
     std::thread::sleep(Duration::from_millis(200));
     assert!(session.audio_stats().is_none());

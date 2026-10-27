@@ -28,6 +28,7 @@ class ConnectedActivity : Activity(), Connection.Listener {
     private lateinit var captureHelp: TextView
     private lateinit var keyboardOff: View
     private lateinit var audio: Switch
+    private lateinit var muteSpeakers: Switch
     private lateinit var volume: SeekBar
     private lateinit var power: Button
     private lateinit var disconnect: Button
@@ -49,6 +50,7 @@ class ConnectedActivity : Activity(), Connection.Listener {
         captureHelp = findViewById(R.id.capture_help)
         keyboardOff = findViewById(R.id.keyboard_off_section)
         audio = findViewById(R.id.audio)
+        muteSpeakers = findViewById(R.id.mute_speakers)
         volume = findViewById(R.id.volume)
         power = findViewById(R.id.power)
         disconnect = findViewById(R.id.disconnect)
@@ -64,6 +66,7 @@ class ConnectedActivity : Activity(), Connection.Listener {
         }
         capture.setOnCheckedChangeListener { _, on -> if (!updating) Connection.setCapturing(on) }
         audio.setOnCheckedChangeListener { _, on -> if (!updating) Connection.setAudio(on) }
+        muteSpeakers.setOnCheckedChangeListener { _, on -> if (!updating) Connection.setSpeakersMuted(on) }
         volume.progress = Settings(this).volume
         volume.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
@@ -157,7 +160,7 @@ class ConnectedActivity : Activity(), Connection.Listener {
                     pairSection.visibility = View.GONE
                     controls.visibility = View.VISIBLE
                     setControlsEnabled(true)
-                    renderControls(info.name, info.audio, info.power.isNotEmpty())
+                    renderControls(info.name, info.audio, info.mute, info.power.isNotEmpty())
                 }
             }
             is Connection.State.Reconnecting -> {
@@ -174,7 +177,7 @@ class ConnectedActivity : Activity(), Connection.Listener {
         updating = false
     }
 
-    private fun renderControls(name: String, hasAudio: Boolean, hasPower: Boolean) {
+    private fun renderControls(name: String, hasAudio: Boolean, canMute: Boolean, hasPower: Boolean) {
         val serviceOn = KeyboardService.isEnabled(this)
         keyboardOff.visibility = if (serviceOn) View.GONE else View.VISIBLE
         capture.isEnabled = serviceOn
@@ -188,11 +191,13 @@ class ConnectedActivity : Activity(), Connection.Listener {
         audio.isEnabled = hasAudio
         audio.isChecked = Connection.audioWanted
         volume.isEnabled = hasAudio
+        muteSpeakers.visibility = if (hasAudio && canMute) View.VISIBLE else View.GONE
+        muteSpeakers.isChecked = Settings(this).muteSpeakers
         power.visibility = if (hasPower) View.VISIBLE else View.GONE
     }
 
     private fun setControlsEnabled(enabled: Boolean) {
-        listOf<View>(capture, audio, volume, power, findViewById(R.id.keys), findViewById(R.id.text)).forEach { it.isEnabled = enabled }
+        listOf<View>(capture, audio, muteSpeakers, volume, power, findViewById(R.id.keys), findViewById(R.id.text)).forEach { it.isEnabled = enabled }
     }
 
     private fun pair() {

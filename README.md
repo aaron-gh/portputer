@@ -10,9 +10,10 @@ Early development. What has been verified:
 
 - The core's unit tests, and an end-to-end test in one process: pairing, rejected wrong codes, reconnecting as a known device, refusal of a different computer at a known address, and a 1.5 s audio stream (test tone) through UDP, the jitter buffer and playback.
 - Discovery between the agent and a client on a real network.
-- Builds: the Android APK, Portputer.app, the agent. The Windows app type-checks for Windows but hasn't been linked (MinGW-w64 isn't installed here) or run.
+- Builds: the Android APK, Portputer.app, the agent, and the Windows app (cross-compiled and linked with MinGW-w64, not yet run).
+- Pairing, keys and audio between the Android app on a Galaxy Z Fold7 and the Mac app.
 
-Not yet run on a device: the Android app, the Mac app's server and client windows, key injection, system audio capture, the login window server, the helper daemon, and anything on Windows.
+Not yet run: the Mac app's client window, Mute Computer Speakers, the login window server, the helper daemon, and anything on Windows.
 
 ## Parts
 
@@ -31,7 +32,7 @@ Not yet run on a device: the Android app, the Mac app's server and client window
 - Computers: paired computers and those found on the network, with their system and who is logged in. Activating a row connects. Wake (Wake on LAN, for a paired computer not on the network) and Forget are custom accessibility actions on the row; the same buttons are in the row for sighted use and hidden from screen readers. Add Computer by Address connects across networks.
 - Pairing: once per computer, with the 12-character code the computer shows.
 - Send Keyboard to Computer: the Portputer Keyboard accessibility service takes key events from external keyboards (built-in keyboards optionally) before the rest of the system and sends them to the computer. Keys go by physical position by default, so the computer's keyboard layout applies; Settings switches to the device's layout. The release shortcut switches between computer and phone: Control-Meta-Escape by default (Meta is the Windows or Command key), with others in Settings. The phone's own buttons, such as volume, stay on the phone.
-- Computer Audio, with volume. Audio buffer in Settings.
+- Computer Audio, with volume, and Mute Computer Speakers, which keeps the sound from the computer's own speakers while it plays on the phone. On a Mac the capture tap is set to muted, so the stream keeps the sound; on Windows the output device is muted, and put back as it was when the audio stops. Audio buffer in Settings.
 - Keys and Shortcuts: keys a phone keyboard lacks (Command, Option, Fn, F1 to F24, media, brightness, Mission Control, Eject, Insert, Print Screen and others) and system shortcuts for the connected system. Activating a key presses it. Modifiers also have Hold, as a custom action and as a button hidden from screen readers.
 - Type Text.
 - Power: Restart, Shut Down, Sleep, Lock Screen, Log Out, Force Restart, Restart Without FileVault Unlock.
@@ -63,7 +64,7 @@ With FileVault on, a normal restart stops at the FileVault unlock screen, where 
 
 Untested and uncertain: whether macOS lets the login window server post key events and capture audio without further permission. If keys don't arrive at the login window, add `/Library/Application Support/Portputer/portputer-agent` in System Settings, Privacy & Security, Accessibility. Logs: `/Library/Logs/Portputer/`.
 
-Build: `macos/build.sh` (release) or `macos/build.sh --debug`, into `macos/build/Portputer.app`. macOS 14.2 or later (Core Audio process taps). macOS keeps permissions by code signature: an ad-hoc signed build loses them when rebuilt; a self-made "Portputer Code Signing" certificate in the login keychain keeps them.
+Build: `macos/build.sh` (release) or `macos/build.sh --debug`, into `macos/build/Portputer.app`. macOS 14.2 or later (Core Audio process taps). macOS keeps permissions by code signature. build.sh signs with a "Portputer Code Signing" certificate if there is one, otherwise an Apple Development certificate, so permissions last across rebuilds; an ad-hoc signed build loses them each time.
 
 ## Windows app
 

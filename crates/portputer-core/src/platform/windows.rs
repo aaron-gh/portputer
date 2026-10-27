@@ -111,3 +111,30 @@ pub fn power(_session: SessionKind, action: PowerAction, _user: Option<&str>, _p
         UnlockedRestart => Err("not available on Windows yet".into()),
     }
 }
+
+/// The output device's mute before Portputer muted it, to put back.
+static MUTED_BEFORE: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+
+/// Mutes the default output device, and puts its mute back as it was.
+pub fn set_speakers_muted(muted: bool) -> Result<(), String> {
+    use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
+    use windows::Win32::Media::Audio::{IMMDeviceEnumerator, MMDeviceEnumerator, eConsole, eRender};
+    use windows::Win32::System::Com::{CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx};
+
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(|e| e.to_string())?;
+        let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole).map_err(|e| e.to_string())?;
+        let volume: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None).map_err(|e| e.to_string())?;
+        let mut before = MUTED_BEFORE.lock().unwrap();
+        if muted {
+            if before.is_none() {
+                *before = Some(volume.GetMute().map_err(|e| e.to_string())?.as_bool());
+            }
+            volume.SetMute(true, std::ptr::null()).map_err(|e| e.to_string())
+        } else {
+            let restore = before.take().unwrap_or(false);
+            volume.SetMute(restore, std::ptr::null()).map_err(|e| e.to_string())
+        }
+    }
+}

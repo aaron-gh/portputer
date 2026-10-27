@@ -55,6 +55,11 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("audio_on_connect", true)
         set(value) = prefs.edit().putBoolean("audio_on_connect", value).apply()
 
+    /** The computer's own speakers stay silent while its audio plays here. */
+    var muteSpeakers: Boolean
+        get() = prefs.getBoolean("mute_speakers", false)
+        set(value) = prefs.edit().putBoolean("mute_speakers", value).apply()
+
     var haptics: Boolean
         get() = prefs.getBoolean("haptics", true)
         set(value) = prefs.edit().putBoolean("haptics", value).apply()

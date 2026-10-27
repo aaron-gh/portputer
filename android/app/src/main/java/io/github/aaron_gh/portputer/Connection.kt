@@ -96,6 +96,7 @@ object Connection {
                     val settings = Settings(app)
                     s.setLatencyMs(settings.bufferMs.toUInt())
                     s.setVolume(settings.volume / 100f)
+                    s.setSpeakersMuted(settings.muteSpeakers)
                     s.info()?.let { onConnected(it) }
                     ConnectionService.start(app)
                 }
@@ -204,6 +205,12 @@ object Connection {
     fun setAudio(on: Boolean) {
         audioWanted = on
         if (on) session?.startAudio() else session?.stopAudio()
+        changed()
+    }
+
+    fun setSpeakersMuted(muted: Boolean) {
+        Settings(app).muteSpeakers = muted
+        session?.setSpeakersMuted(muted)
         changed()
     }
 

@@ -327,3 +327,82 @@ pub fn helper(request: &HelperRequest) -> Result<(), String> {
     let reply: HelperReply = serde_json::from_str(&reply).map_err(|e| e.to_string())?;
     if reply.ok { Ok(()) } else { Err(reply.error) }
 }
+
+/// Mutes the computer's speakers while its sound is captured, by setting the
+/// mute behaviour of the capture tap: the tap still gets the sound. Taps are
+/// private to the process that made them; cpal names its own after the
+/// process ID.
+pub fn set_speakers_muted(muted: bool) -> Result<(), String> {
+    use std::ptr::NonNull;
+
+    use objc2::rc::Retained;
+    use objc2_core_audio::{
+        AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectID, AudioObjectPropertyAddress,
+        AudioObjectSetPropertyData, CATapDescription, CATapMuteBehavior, kAudioHardwarePropertyTapList,
+        kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject,
+        kAudioTapPropertyDescription,
+    };
+
+    let address = |selector| AudioObjectPropertyAddress {
+        mSelector: selector,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain,
+    };
+    let list = address(kAudioHardwarePropertyTapList);
+    let mut size = 0u32;
+    let status = unsafe {
+        AudioObjectGetPropertyDataSize(kAudioObjectSystemObject as AudioObjectID, NonNull::from(&list), 0, std::ptr::null(), NonNull::from(&mut size))
+    };
+    if status != 0 {
+        return Err(format!("Core Audio error {status} listing taps"));
+    }
+    let mut taps = vec![0 as AudioObjectID; size as usize / std::mem::size_of::<AudioObjectID>()];
+    let status = unsafe {
+        AudioObjectGetPropertyData(
+            kAudioObjectSystemObject as AudioObjectID,
+            NonNull::from(&list),
+            0,
+            std::ptr::null(),
+            NonNull::from(&mut size),
+            NonNull::new(taps.as_mut_ptr()).unwrap().cast(),
+        )
+    };
+    if status != 0 {
+        return Err(format!("Core Audio error {status} listing taps"));
+    }
+    let prefix = format!("cpal output recorder {}.", std::process::id());
+    let description = address(kAudioTapPropertyDescription);
+    let mut changed = 0;
+    for tap in taps {
+        let mut object: *mut CATapDescription = std::ptr::null_mut();
+        let mut size = std::mem::size_of::<*mut CATapDescription>() as u32;
+        let status = unsafe {
+            AudioObjectGetPropertyData(tap, NonNull::from(&description), 0, std::ptr::null(), NonNull::from(&mut size), NonNull::from(&mut object).cast())
+        };
+        // The description comes back retained, for the caller to release.
+        let Some(desc) = (status == 0).then(|| unsafe { Retained::from_raw(object) }).flatten() else { continue };
+        if !unsafe { desc.name() }.to_string().starts_with(&prefix) {
+            continue;
+        }
+        unsafe { desc.setMuteBehavior(if muted { CATapMuteBehavior::Muted } else { CATapMuteBehavior::Unmuted }) };
+        let pointer: *const CATapDescription = Retained::as_ptr(&desc);
+        let status = unsafe {
+            AudioObjectSetPropertyData(
+                tap,
+                NonNull::from(&description),
+                0,
+                std::ptr::null(),
+                std::mem::size_of::<*const CATapDescription>() as u32,
+                NonNull::from(&pointer).cast(),
+            )
+        };
+        if status != 0 {
+            return Err(format!("Core Audio error {status} changing the tap"));
+        }
+        changed += 1;
+    }
+    if changed == 0 {
+        return Err("no audio capture is running".into());
+    }
+    Ok(())
+}

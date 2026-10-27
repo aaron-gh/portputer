@@ -51,6 +51,8 @@ pub struct ServerInfo {
     pub version: String,
     pub power: Vec<PowerAction>,
     pub audio: bool,
+    /// The computer's speakers can be muted while it streams.
+    pub mute: bool,
     pub host: String,
     pub port: u16,
     /// Paired both ways: keys and commands are allowed.
@@ -94,6 +96,7 @@ enum Command {
 struct AudioSettings {
     volume: f32,
     latency_ms: u32,
+    mute_speakers: bool,
 }
 
 struct Inner {
@@ -162,7 +165,7 @@ async fn connect_once(host: &str, port: u16, expected: Option<&str>, identity: &
     let welcome: ServerMessage = tokio::time::timeout(Duration::from_secs(10), reader.recv())
         .await
         .map_err(|_| Error::Protocol("no welcome from the server".into()))??;
-    let ServerMessage::Welcome { server_id, name: server_name, os, session, user, paired, version, power, audio, .. } = welcome else {
+    let ServerMessage::Welcome { server_id, name: server_name, os, session, user, paired, version, power, audio, mute } = welcome else {
         if let ServerMessage::Error { message, .. } = welcome {
             return Err(Error::Refused(message));
         }
@@ -177,7 +180,7 @@ async fn connect_once(host: &str, port: u16, expected: Option<&str>, identity: &
         writer: hs.writer,
         hash: hs.hash,
         public_key: hs.remote_static,
-        info: ServerInfo { id, name: server_name, os, session, user, version, power, audio, host: host.to_string(), port, trusted: pinned && paired },
+        info: ServerInfo { id, name: server_name, os, session, user, version, power, audio, mute, host: host.to_string(), port, trusted: pinned && paired },
         peer_ip: addr.ip(),
     })
 }
@@ -194,7 +197,7 @@ impl Session {
         let inner = Arc::new(Inner {
             tx,
             info: Mutex::new(Some(conn.info.clone())),
-            settings: Mutex::new(AudioSettings { volume: 1.0, latency_ms: 40 }),
+            settings: Mutex::new(AudioSettings { volume: 1.0, latency_ms: 40, mute_speakers: false }),
             jitter: Mutex::new(None),
         });
         if conn.info.trusted {
@@ -256,7 +259,14 @@ impl Session {
     }
 
     pub fn start_audio(&self) {
-        self.send(ClientMessage::AudioStart);
+        let mute = self.inner.settings.lock().unwrap().mute_speakers;
+        self.send(ClientMessage::AudioStart { mute });
+    }
+
+    /// Keeps the sound from the computer's own speakers while it streams here.
+    pub fn set_speakers_muted(&self, muted: bool) {
+        self.inner.settings.lock().unwrap().mute_speakers = muted;
+        self.send(ClientMessage::MuteSpeakers { muted });
     }
 
     pub fn stop_audio(&self) {
@@ -434,7 +444,8 @@ impl Supervisor {
         let mut last_heard = Instant::now();
         let mut n = 0u64;
         if info.trusted && self.audio_wanted {
-            let _ = writer.send(&ClientMessage::AudioStart).await;
+            let mute = self.inner.settings.lock().unwrap().mute_speakers;
+            let _ = writer.send(&ClientMessage::AudioStart { mute }).await;
         }
         let ended = loop {
             tokio::select! {
@@ -458,7 +469,7 @@ impl Supervisor {
                                 continue;
                             }
                             match &message {
-                                ClientMessage::AudioStart => self.audio_wanted = true,
+                                ClientMessage::AudioStart { .. } => self.audio_wanted = true,
                                 ClientMessage::AudioStop => {
                                     self.audio_wanted = false;
                                     audio = None;
