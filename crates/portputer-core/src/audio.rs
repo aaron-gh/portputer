@@ -750,9 +750,34 @@ pub mod loopback {
         rate
     }
 
-    /// A private multi-output device: the output in use, which keeps the
-    /// clock, and Portputer Speakers.
+    fn running_somewhere(device: AudioObjectID) -> bool {
+        let a = address(objc2_core_audio::kAudioDevicePropertyDeviceIsRunningSomewhere);
+        let mut running: u32 = 0;
+        let mut size = 4u32;
+        unsafe { AudioObjectGetPropertyData(device, NonNull::from(&a), 0, std::ptr::null(), NonNull::from(&mut size), NonNull::from(&mut running).cast()) };
+        running != 0
+    }
+
+    /// The devices in an aggregate device, for checking it.
+    fn members_of(aggregate: AudioObjectID) -> Vec<AudioObjectID> {
+        let a = address(objc2_core_audio::kAudioAggregateDevicePropertyActiveSubDeviceList);
+        let mut ids = [0 as AudioObjectID; 8];
+        let mut size = std::mem::size_of_val(&ids) as u32;
+        unsafe { AudioObjectGetPropertyData(aggregate, NonNull::from(&a), 0, std::ptr::null(), NonNull::from(&mut size), NonNull::from(&mut ids).cast()) };
+        ids[..size as usize / 4].to_vec()
+    }
+
+    /// The multi-output device's UID: one at a time, so one left by a server
+    /// that stopped without putting the outputs back is replaced.
+    const MULTI_OUTPUT_UID: &str = "io.github.aaron-gh.portputer.multi-output";
+
+    /// A multi-output device: the output in use, which keeps the clock, and
+    /// Portputer Speakers. Not private: macOS ignores a private one as the
+    /// default output.
     fn make_aggregate(output: AudioObjectID) -> Result<AudioObjectID, String> {
+        if let Some(old) = super::feed::device_for(MULTI_OUTPUT_UID) {
+            unsafe { AudioHardwareDestroyAggregateDevice(old) };
+        }
         let output_uid = uid_of(output).ok_or("the output device has no UID")?;
         let key = |k: &str| CFString::from_str(k);
         let sub = |uid: &CFString, drift: bool| -> CFRetained<CFDictionary<CFString, CFType>> {
@@ -762,11 +787,11 @@ pub mod loopback {
         };
         let speakers_uid = CFString::from_str(SPEAKERS_UID);
         let subdevices = CFArray::from_retained_objects(&[sub(&output_uid, false), sub(&speakers_uid, true)]);
-        let (name, uid) = (CFString::from_str("Portputer Login Window Output"), CFString::from_str(&format!("io.github.aaron-gh.portputer.multi-output.{}", std::process::id())));
-        let yes = CFNumber::new_i32(1);
+        let (name, uid) = (CFString::from_str("Portputer Output"), CFString::from_str(MULTI_OUTPUT_UID));
+        let (yes, no) = (CFNumber::new_i32(1), CFNumber::new_i32(0));
         let keys = [key("name"), key("uid"), key("private"), key("stacked"), key("master"), key("subdevices")];
         let key_refs: Vec<&CFString> = keys.iter().map(|k| &**k).collect();
-        let values: [&CFType; 6] = [name.as_ref(), uid.as_ref(), yes.as_ref(), yes.as_ref(), output_uid.as_ref(), subdevices.as_ref()];
+        let values: [&CFType; 6] = [name.as_ref(), uid.as_ref(), no.as_ref(), yes.as_ref(), output_uid.as_ref(), subdevices.as_ref()];
         let description = CFDictionary::<CFString, CFType>::from_slices(&key_refs, &values);
         let mut id: AudioObjectID = 0;
         let status = unsafe { AudioHardwareCreateAggregateDevice(description.as_opaque(), NonNull::from(&mut id)) };
@@ -828,7 +853,7 @@ pub mod loopback {
         route(&mut routing, false)?;
         let aggregate = routing.aggregate;
         *ROUTING.lock().unwrap() = Some(routing);
-        let played = (|| -> Result<(), String> {
+        let played = (|| -> Result<String, String> {
             let device = cpal::default_host().default_output_device().ok_or("no output device")?;
             let config = device.default_output_config().map_err(|e| e.to_string())?.config();
             let (rate, channels) = (config.sample_rate as f32, config.channels as usize);
@@ -848,13 +873,15 @@ pub mod loopback {
                 )
                 .map_err(|e| e.to_string())?;
             stream.play().map_err(|e| e.to_string())?;
-            std::thread::sleep(std::time::Duration::from_millis(1000));
-            Ok(())
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let running = running_somewhere(speakers);
+            let members = aggregate.map(members_of).unwrap_or_default();
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            Ok(format!("members {members:?}, Portputer Speakers running: {running}, default output {}", get_device(kAudioHardwarePropertyDefaultOutputDevice)))
         })();
         let rate = rate_of(speakers);
         restore();
-        played?;
-        Ok(format!("played through multi-output device {aggregate:?} with Portputer Speakers at {rate} Hz; outputs put back"))
+        Ok(format!("multi-output device {aggregate:?}, Portputer Speakers {speakers} at {rate} Hz: {}; outputs put back", played?))
     }
 
     pub fn start(mut on_audio: impl FnMut(&[f32], usize) + Send + 'static) -> Result<Capture, Error> {
