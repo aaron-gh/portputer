@@ -55,6 +55,7 @@ mod id {
     pub const DISCONNECT: u16 = 310;
     pub const RELEASE_ALL: u16 = 311;
     pub const QUIT: u16 = 401;
+    pub const CHECK_UPDATES: u16 = 402;
     pub const TRAY_OPEN: u16 = 501;
     pub const TRAY_PAIR: u16 = 502;
     pub const TRAY_QUIT: u16 = 503;
@@ -108,6 +109,7 @@ struct Controls {
     type_text: HWND,
     disconnect: HWND,
     version: HWND,
+    check_updates: HWND,
     quit: HWND,
 }
 
@@ -313,6 +315,7 @@ impl App {
             type_text: ui::button(hwnd, "Type", id::TYPE),
             disconnect: ui::button(hwnd, "Disconnect", id::DISCONNECT),
             version: l(&format!("Portputer version {VERSION}")),
+            check_updates: ui::button(hwnd, "Check for Updates", id::CHECK_UPDATES),
             quit: ui::button(hwnd, "Quit Portputer", id::QUIT),
         };
         ui::set_text(c.port, &DEFAULT_PORT.to_string());
@@ -359,7 +362,7 @@ impl App {
         f.row(&[(c.text_label, 1), (c.text, 3), (c.type_text, 1)], h + 2);
         f.row(&[(c.disconnect, 1)], h + 4);
         f.gap(8);
-        f.row(&[(c.version, 1)], h);
+        f.row(&[(c.version, 2), (c.check_updates, 1)], h + 4);
         f.row(&[(c.quit, 1)], h + 4);
     }
 
@@ -872,6 +875,11 @@ impl App {
                 }
             }
             id::DISCONNECT => self.disconnect(),
+            id::CHECK_UPDATES => {
+                if !crate::updates::check() {
+                    self.say("This copy of Portputer can't update itself: WinSparkle.dll isn't beside Portputer.exe.");
+                }
+            }
             id::QUIT | id::TRAY_QUIT => unsafe {
                 let _ = DestroyWindow(self.hwnd);
             },
@@ -994,7 +1002,12 @@ fn tray(hwnd: HWND, add: bool) {
 fn tray_menu(hwnd: HWND) {
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
-        for (id, label) in [(id::TRAY_OPEN, "Open Portputer"), (id::TRAY_PAIR, "Pair New Device"), (id::TRAY_QUIT, "Quit Portputer")] {
+        for (id, label) in [
+            (id::TRAY_OPEN, "Open Portputer"),
+            (id::TRAY_PAIR, "Pair New Device"),
+            (id::CHECK_UPDATES, "Check for Updates"),
+            (id::TRAY_QUIT, "Quit Portputer"),
+        ] {
             let w = ui::wide(label);
             let _ = AppendMenuW(menu, MF_STRING, id as usize, PCWSTR(w.as_ptr()));
         }
@@ -1063,6 +1076,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                 a.server = None;
             });
             tray(hwnd, false);
+            crate::updates::stop();
             unsafe { PostQuitMessage(0) };
             Some(LRESULT(0))
         }
@@ -1124,6 +1138,7 @@ pub fn run() {
             return;
         };
         ui::set_main_window(hwnd);
+        crate::updates::start(VERSION);
         let controls = App::create_controls(hwnd);
         ui::set_checked(controls.startup, starts_at_login());
         let browser = Browser::start(|event| {

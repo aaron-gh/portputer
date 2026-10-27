@@ -6,12 +6,14 @@ struct PortputerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var server = ServerModel.shared
     @StateObject private var client = ClientModel.shared
+    @StateObject private var updater = Updater.shared
 
     var body: some Scene {
         MenuBarExtra("Portputer", systemImage: "keyboard.badge.ellipsis") {
             MenuContent()
                 .environmentObject(server)
                 .environmentObject(client)
+                .environmentObject(updater)
         }
 
         Window("Portputer Settings", id: Windows.settings) {
@@ -55,6 +57,7 @@ enum Windows {
 struct MenuContent: View {
     @EnvironmentObject var server: ServerModel
     @EnvironmentObject var client: ClientModel
+    @EnvironmentObject var updater: Updater
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -62,6 +65,9 @@ struct MenuContent: View {
             Text(server.running ? "Server on, port \(server.port)" : "Server off")
             if !server.connected.isEmpty {
                 Text("Connected: \(server.connected.map(\.name).joined(separator: ", "))")
+            }
+            if server.systemComponentsOutdated || server.microphoneDriverOutdated {
+                Button("Update Login Window Support and Driver in Settings…") { Windows.show(Windows.settings) }
             }
             if !server.inputAllowed {
                 Button("Allow Typing (Accessibility Permission)…") {
@@ -79,6 +85,7 @@ struct MenuContent: View {
                 .keyboardShortcut(",")
             Divider()
             Text("Portputer \(appVersion)")
+            CheckForUpdatesMenuItem(updater: updater)
             Button("Quit Portputer") { NSApp.terminate(nil) }
                 .keyboardShortcut("q")
         }

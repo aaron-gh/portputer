@@ -89,7 +89,10 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 LabeledContent("Portputer Microphone driver") {
                     HStack {
-                        Text(server.microphoneDriver ? "Installed" : "Not installed")
+                        Text(server.microphoneDriver ? (server.microphoneDriverOutdated ? "Installed, from another version" : "Installed") : "Not installed")
+                        if server.microphoneDriverOutdated {
+                            Button("Update…") { server.setMicrophoneDriver(true) }
+                        }
                         Button(server.microphoneDriver ? "Remove…" : "Install…") {
                             server.setMicrophoneDriver(!server.microphoneDriver)
                         }
@@ -102,7 +105,10 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 LabeledContent("Login window support") {
                     HStack {
-                        Text(server.systemComponents ? "Installed" : "Not installed")
+                        Text(server.systemComponents ? (server.systemComponentsOutdated ? "Installed, from another version" : "Installed") : "Not installed")
+                        if server.systemComponentsOutdated {
+                            Button("Update…") { server.setSystemComponents(true) }
+                        }
                         Button(server.systemComponents ? "Remove…" : "Install…") {
                             server.setSystemComponents(!server.systemComponents)
                         }
@@ -114,6 +120,7 @@ struct SettingsView: View {
             }
             Section("About") {
                 LabeledContent("Version", value: appVersion)
+                CheckForUpdatesMenuItem(updater: Updater.shared)
             }
         }
         .formStyle(.grouped)

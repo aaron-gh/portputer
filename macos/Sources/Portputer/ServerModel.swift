@@ -17,6 +17,10 @@ final class ServerModel: ObservableObject {
     @Published private(set) var inputAllowed = false
     @Published private(set) var systemComponents = false
     @Published private(set) var microphoneDriver = false
+    /// Installed from another version of Portputer than this one: after an
+    /// update, they're reinstalled from Settings.
+    @Published private(set) var systemComponentsOutdated = false
+    @Published private(set) var microphoneDriverOutdated = false
     @Published var relayEnabled = true
     @Published var relayCustomURL = ""
     @Published private(set) var relayBuiltIn = ""
@@ -95,6 +99,14 @@ final class ServerModel: ObservableObject {
         }
         systemComponents = systemComponentsInstalled()
         microphoneDriver = microphoneDriverInstalled()
+        let bundle = Bundle.main.bundleURL.path
+        let files = FileManager.default
+        systemComponentsOutdated = systemComponents && !files.contentsEqual(
+            atPath: "\(bundle)/Contents/Helpers/portputer-agent",
+            andPath: "/Library/Application Support/Portputer/portputer-agent")
+        microphoneDriverOutdated = microphoneDriver && !files.contentsEqual(
+            atPath: "\(bundle)/Contents/Resources/PortputerMicrophone.driver",
+            andPath: "/Library/Audio/Plug-Ins/HAL/PortputerMicrophone.driver")
         openAtLogin = SMAppService.mainApp.status == .enabled
     }
 

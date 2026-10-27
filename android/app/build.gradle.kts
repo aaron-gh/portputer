@@ -11,19 +11,42 @@ android {
         // Android 8: AAudio, which the Rust core plays the computer's sound with.
         minSdk = 26
         targetSdk = 36
+        // Portputer's version, and a build number that only goes up (the
+        // commit count, as for the Mac and Windows apps), so each build
+        // installs over the last and updates compare by it.
         val cargo = rootProject.file("../Cargo.toml").readText()
         val version = Regex("""(?m)^version = "(.*)"""").find(cargo)?.groupValues?.get(1) ?: "0.0.0"
-        versionCode = System.getenv("PORTPUTER_BUILD_NUMBER")?.toIntOrNull() ?: 1
+        val commits = runCatching {
+            providers.exec { commandLine("git", "rev-list", "--count", "HEAD") }.standardOutput.asText.get().trim().toInt()
+        }.getOrNull()
+        versionCode = System.getenv("PORTPUTER_BUILD_NUMBER")?.toIntOrNull() ?: commits ?: 1
         versionName = System.getenv("PORTPUTER_VERSION") ?: version
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }
     }
 
+    // Releases are signed with Portputer's own key (android/signing.sh), so
+    // updates install over each other; without it, this computer's debug key.
+    val portputerKey = file(System.getenv("PORTPUTER_ANDROID_KEYSTORE") ?: "${System.getProperty("user.home")}/.android/portputer.keystore")
+    val portputerKeyPassword: String? = System.getenv("PORTPUTER_ANDROID_KEY_PASSWORD")
+    signingConfigs {
+        create("portputer") {
+            storeFile = portputerKey
+            storePassword = portputerKeyPassword
+            keyAlias = "portputer"
+            keyPassword = portputerKeyPassword
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (portputerKey.isFile && portputerKeyPassword != null) {
+                signingConfigs.getByName("portputer")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 

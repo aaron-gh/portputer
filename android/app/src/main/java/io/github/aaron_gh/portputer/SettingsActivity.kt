@@ -49,6 +49,10 @@ class SettingsActivity : Activity() {
 
         val version = packageManager.getPackageInfo(packageName, 0).versionName ?: ""
         findViewById<TextView>(R.id.version).text = getString(R.string.settings_version, version)
+        val updateStatus = findViewById<TextView>(R.id.update_status)
+        findViewById<android.widget.Button>(R.id.check_updates).setOnClickListener {
+            UpdatePrompt.check(this, quietly = false) { updateStatus.text = it }
+        }
 
         bind(R.id.capture_on_connect, settings.captureOnConnect) { settings.captureOnConnect = it }
         bind(R.id.audio_on_connect, settings.audioOnConnect) { settings.audioOnConnect = it }

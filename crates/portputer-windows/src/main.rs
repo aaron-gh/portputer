@@ -16,6 +16,8 @@ mod hook;
 mod speech;
 #[cfg(windows)]
 mod ui;
+#[cfg(windows)]
+mod updates;
 
 #[cfg(not(windows))]
 fn main() {

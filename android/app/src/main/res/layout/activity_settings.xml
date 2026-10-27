@@ -127,6 +127,18 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:paddingTop="24dp" />
+
+            <Button
+                android:id="@+id/check_updates"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/settings_check_updates" />
+
+            <TextView
+                android:id="@+id/update_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:accessibilityLiveRegion="polite" />
         </LinearLayout>
     </ScrollView>
 </LinearLayout>

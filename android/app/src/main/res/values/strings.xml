@@ -162,6 +162,24 @@
     <string name="settings_builtin_keyboards">Include built-in keyboards</string>
     <string name="settings_builtin_help">For devices with a hardware keyboard. The device\'s own buttons, such as volume, always stay on the device.</string>
     <string name="settings_version">Portputer version %1$s</string>
+    <string name="settings_check_updates">Check for Updates</string>
+
+    <!-- Updates -->
+    <string name="update_checking">Checking for updates.</string>
+    <string name="update_none">Portputer %1$s is up to date.</string>
+    <string name="update_unreachable">Couldn\'t reach Portputer\'s update feed. Check the phone\'s internet connection.</string>
+    <string name="update_title">Update Available</string>
+    <string name="update_available">Portputer %1$s is available. You have %2$s.</string>
+    <string name="update_install">Install</string>
+    <string name="update_later">Later</string>
+    <string name="update_allow_title">Allow Updates</string>
+    <string name="update_allow_message">Android needs permission for Portputer to install its updates. On the next screen, turn on Allow from this source, then choose Check for Updates again.</string>
+    <string name="update_downloading">Downloading Portputer %1$s.</string>
+    <string name="update_download_failed">The download failed: %1$d.</string>
+    <string name="update_mismatch">The download didn\'t match Portputer\'s update feed, so it wasn\'t installed.</string>
+    <string name="update_installing">Installing Portputer %1$s. Android may ask you to confirm.</string>
+    <string name="update_failed">The update couldn\'t be installed.</string>
+    <string name="update_install_failed">Portputer couldn\'t update: %1$s</string>
     <string name="settings_haptics">Vibrate when the keyboard switches</string>
 
     <string name="release_ctrl_meta_esc">Control-Meta-Escape (Meta is the Windows or Command key)</string>
