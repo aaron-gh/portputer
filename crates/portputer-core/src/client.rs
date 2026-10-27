@@ -1499,13 +1499,16 @@ fn is_tailscale(host: &str) -> bool {
 pub fn probe(store_dir: &std::path::Path, id: &str) -> Reachability {
     let Some(known) = ClientStore::new(store_dir).server(id) else { return Reachability::NotReachable };
     let mut addresses: Vec<(String, u16)> = vec![];
+    // Each address on both servers' ports: at the login window, only the
+    // login window's server answers.
+    let other = |p: u16| if p == crate::protocol::LOGIN_WINDOW_PORT { crate::protocol::DEFAULT_PORT } else { crate::protocol::LOGIN_WINDOW_PORT };
     if !known.host.is_empty() {
         addresses.push((known.host.clone(), known.port));
+        addresses.push((known.host.clone(), other(known.port)));
     }
     for (h, p) in &known.addresses {
         addresses.push((h.clone(), *p));
-        let other = if *p == crate::protocol::LOGIN_WINDOW_PORT { crate::protocol::DEFAULT_PORT } else { crate::protocol::LOGIN_WINDOW_PORT };
-        addresses.push((h.clone(), other));
+        addresses.push((h.clone(), other(*p)));
     }
     dedup_in_order(&mut addresses);
     let direct = runtime().block_on(async move {

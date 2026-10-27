@@ -233,7 +233,9 @@ pub async fn listen(
             Err(_) => on_state(Err("The relay didn't answer.".into())),
         }
         tokio::time::sleep(wait).await;
-        wait = (wait * 2).min(Duration::from_secs(60));
+        // At most 15 s between tries: at the login window after a restart,
+        // the network comes up a little after the server starts.
+        wait = (wait * 2).min(Duration::from_secs(15));
     }
 }
 
