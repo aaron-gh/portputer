@@ -186,9 +186,16 @@ pub fn input_allowed(ask: bool) -> bool {
     false
 }
 
-/// What each check says, for the log.
+/// What each check says, for the log, and whether there's an event source
+/// (keys are posted with one when there is).
 pub fn input_permission_detail() -> String {
-    format!("accessibility={} post_event={}", unsafe { AXIsProcessTrusted() }, CGPreflightPostEventAccess())
+    format!(
+        "accessibility={} post_event={} event_source={} uid={}",
+        unsafe { AXIsProcessTrusted() },
+        CGPreflightPostEventAccess(),
+        CGEventSource::new(CGEventSourceStateID::HIDSystemState).is_some(),
+        unsafe { libc::geteuid() }
+    )
 }
 
 pub fn is_root() -> bool {
