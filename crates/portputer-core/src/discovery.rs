@@ -113,11 +113,12 @@ impl Browser {
                             .get_addresses()
                             .iter()
                             .map(|a| a.to_ip_addr())
-                            .filter(|a| !a.is_loopback())
+                            // Link-local IPv6 needs a scope to connect to.
+                            .filter(|a| !a.is_loopback() && !matches!(a, std::net::IpAddr::V6(v6) if v6.is_unicast_link_local()))
                             .map(|a| a.to_string())
                             .collect();
-                        // IPv4 first: link-local IPv6 needs a scope to connect.
                         addresses.sort_by_key(|a| a.contains(':'));
+                        addresses.dedup();
                         let os = match prop("os").as_str() {
                             "mac" => Os::Mac,
                             "windows" => Os::Windows,

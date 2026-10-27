@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>Portputer</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.aaron-gh.portputer</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Portputer</string>
+	<key>CFBundleDisplayName</key>
+	<string>Portputer</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.2</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Portputer sends this Mac's audio output to the connected device.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Portputer accepts connections from paired devices on the local network and finds computers to connect to.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_portputer._tcp</string>
+	</array>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Portputer asks the login window to restart, shut down or log out when a paired device requests it.</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Apache License 2.0</string>
+</dict>
+</plist>
