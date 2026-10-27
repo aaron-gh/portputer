@@ -35,6 +35,9 @@ struct PortputerApp: App {
     }
 }
 
+/// The version people see, from the app's Info.plist (the workspace's, in Cargo.toml).
+let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+
 enum Windows {
     static let settings = "settings"
     static let pair = "pair"
@@ -75,6 +78,7 @@ struct MenuContent: View {
             Button("Settings…") { Windows.show(Windows.settings) }
                 .keyboardShortcut(",")
             Divider()
+            Text("Portputer \(appVersion)")
             Button("Quit Portputer") { NSApp.terminate(nil) }
                 .keyboardShortcut("q")
         }

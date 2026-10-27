@@ -7,6 +7,7 @@ import android.widget.EditText
 import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.Switch
+import android.widget.TextView
 
 class SettingsActivity : Activity() {
     private lateinit var settings: Settings
@@ -45,6 +46,9 @@ class SettingsActivity : Activity() {
                 Connection.setBuffer(ms)
             }
         }
+
+        val version = packageManager.getPackageInfo(packageName, 0).versionName ?: ""
+        findViewById<TextView>(R.id.version).text = getString(R.string.settings_version, version)
 
         bind(R.id.capture_on_connect, settings.captureOnConnect) { settings.captureOnConnect = it }
         bind(R.id.audio_on_connect, settings.audioOnConnect) { settings.audioOnConnect = it }

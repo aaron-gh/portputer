@@ -19,6 +19,9 @@ use windows::core::PCWSTR;
 
 use crate::{hook, speech, ui};
 
+/// The version people see: the workspace's, in Cargo.toml.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 mod id {
     pub const ACCEPT: u16 = 101;
     pub const STARTUP: u16 = 102;
@@ -104,6 +107,7 @@ struct Controls {
     text: HWND,
     type_text: HWND,
     disconnect: HWND,
+    version: HWND,
     quit: HWND,
 }
 
@@ -308,6 +312,7 @@ impl App {
             text: ui::edit(hwnd, id::TEXT, false),
             type_text: ui::button(hwnd, "Type", id::TYPE),
             disconnect: ui::button(hwnd, "Disconnect", id::DISCONNECT),
+            version: l(&format!("Portputer version {VERSION}")),
             quit: ui::button(hwnd, "Quit Portputer", id::QUIT),
         };
         ui::set_text(c.port, &DEFAULT_PORT.to_string());
@@ -354,6 +359,7 @@ impl App {
         f.row(&[(c.text_label, 1), (c.text, 3), (c.type_text, 1)], h + 2);
         f.row(&[(c.disconnect, 1)], h + 4);
         f.gap(8);
+        f.row(&[(c.version, 1)], h);
         f.row(&[(c.quit, 1)], h + 4);
     }
 
@@ -978,7 +984,7 @@ fn tray(hwnd: HWND, add: bool) {
         hIcon: unsafe { LoadIconW(None, IDI_APPLICATION).unwrap_or_default() },
         ..Default::default()
     };
-    let tip = ui::wide("Portputer");
+    let tip = ui::wide(&format!("Portputer {VERSION}"));
     data.szTip[..tip.len()].copy_from_slice(&tip);
     unsafe {
         let _ = Shell_NotifyIconW(if add { NIM_ADD } else { NIM_DELETE }, &data);
@@ -1100,7 +1106,7 @@ pub fn run() {
             ..Default::default()
         };
         RegisterClassExW(&wc);
-        let title = ui::wide("Portputer");
+        let title = ui::wide(&format!("Portputer {VERSION}"));
         let Ok(hwnd) = CreateWindowExW(
             WS_EX_CONTROLPARENT,
             PCWSTR(class.as_ptr()),

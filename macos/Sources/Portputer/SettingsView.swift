@@ -112,6 +112,9 @@ struct SettingsView: View {
                     Button("Update Login Window Pairings") { server.syncLoginWindow() }
                 }
             }
+            Section("About") {
+                LabeledContent("Version", value: appVersion)
+            }
         }
         .formStyle(.grouped)
         .onAppear { server.refresh() }
