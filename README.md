@@ -90,7 +90,7 @@ Clipboard and files are off at the Mac login window, where the server runs as ro
 
 ## Internet relay
 
-When a paired computer isn't on the device's network, Portputer connects through an internet relay: a Cloudflare Worker you deploy to your own Cloudflare account (`relay/`, with instructions there). Set its address and token on the computer (Mac: Settings, Internet Relay; Windows: the relay fields); paired devices learn them from the computer. The computer list shows such computers as "through the internet relay". Everything works through it: keys, audio (over WebSockets, with at least 100 ms of buffer), the microphone, the clipboard and files. Portputer's own encryption runs end to end inside.
+When a paired computer isn't on the device's network, Portputer connects through an internet relay, a Cloudflare Worker (`relay/`). Nothing is set up by the person using it: the relay's address is built into the apps, computers are reachable through it unless turned off (Mac: Settings, Internet Relay; Windows: the relay checkbox), and a device learns its computer's room and its own token when it pairs. Only devices paired with a computer can find or reach it there; unpairing a device shuts it out at the relay too. Everything works through it: keys, audio (over WebSockets, with at least 100 ms of buffer), the microphone, the clipboard and files. `relay/README.md` covers deploying it and its privacy.
 
 ## Security
 

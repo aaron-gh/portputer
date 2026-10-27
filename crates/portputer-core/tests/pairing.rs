@@ -177,16 +177,15 @@ fn transfers_files() {
 }
 
 /// Through a running relay (PORTPUTER_RELAY_TEST_URL, such as
-/// http://127.0.0.1:8787 from `wrangler dev`, with PORTPUTER_RELAY_TEST_TOKEN):
-/// pair on the network, learn the relay, then connect, list files and stream
-/// audio through it alone.
+/// http://127.0.0.1:8787 from `wrangler dev`): pair on the network, learn the
+/// relay, then connect, list files and stream audio through it alone; a
+/// made-up token and an unpaired device are refused.
 #[test]
 fn through_relay() {
     let Ok(url) = std::env::var("PORTPUTER_RELAY_TEST_URL") else {
         eprintln!("PORTPUTER_RELAY_TEST_URL not set: skipped");
         return;
     };
-    let token = std::env::var("PORTPUTER_RELAY_TEST_TOKEN").unwrap_or_default();
     unsafe {
         std::env::set_var("PORTPUTER_NO_PROMPT", "1");
         std::env::set_var("PORTPUTER_TEST_TONE", "1");
@@ -210,7 +209,7 @@ fn through_relay() {
         observer: Some(Arc::new(Watch(listening.clone()))),
     })
     .unwrap();
-    server.set_relay(Some(portputer_core::relay::RelayConfig { url, token })).unwrap();
+    server.set_relay(true, Some(url.clone())).unwrap();
     for _ in 0..50 {
         if *listening.lock().unwrap() {
             break;
@@ -242,6 +241,21 @@ fn through_relay() {
     let stats = relayed.audio_stats().expect("audio through the relay");
     assert!(stats.received > 100, "{stats:?}");
     relayed.close();
+    std::thread::sleep(Duration::from_millis(200));
+
+    // A made-up token for the right room is refused like a room that isn't there.
+    let mut stranger = known[0].relay.clone().unwrap();
+    stranger.token = "0".repeat(64);
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let refused = rt.block_on(portputer_core::relay::connect(&stranger));
+    assert!(matches!(refused, Err(portputer_core::Error::Refused(_))), "made-up token refused");
+
+    // Unpaired: the relay stops letting this device in.
+    let client_id = server.paired()[0].id.clone();
+    server.unpair(&client_id).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let unpaired = rt.block_on(portputer_core::relay::connect(known[0].relay.as_ref().unwrap()));
+    assert!(matches!(unpaired, Err(portputer_core::Error::Refused(_))), "unpaired device refused");
     for d in [server_dir, client_dir] {
         let _ = std::fs::remove_dir_all(d);
     }

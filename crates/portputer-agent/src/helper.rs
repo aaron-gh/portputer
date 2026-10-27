@@ -97,7 +97,7 @@ fn answer(uid: libc::uid_t, request: HelperRequest) -> Result<(), String> {
         let dir = Path::new(SYSTEM_STORE);
         write_private(&dir.join("identity.json"), &serde_json::to_vec_pretty(&identity).unwrap()).map_err(|e| e.to_string())?;
         write_private(&dir.join("paired.json"), &serde_json::to_vec_pretty(&paired).unwrap()).map_err(|e| e.to_string())?;
-        match request.relay.and_then(|r| serde_json::from_str::<portputer_core::relay::RelayConfig>(&r).ok()) {
+        match request.relay.and_then(|r| serde_json::from_str::<portputer_core::relay::RelayHome>(&r).ok()) {
             Some(relay) => write_private(&dir.join("relay.json"), &serde_json::to_vec_pretty(&relay).unwrap()).map_err(|e| e.to_string())?,
             None => {
                 let _ = std::fs::remove_file(dir.join("relay.json"));

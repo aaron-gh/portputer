@@ -52,7 +52,7 @@ A man in the middle has a different `h` with each side, so can't produce either 
 | `audio_stopped` | `reason` |
 | `mic_ready` | `port` (UDP), `key` (hex, 32 bytes) |
 | `mic_stopped` | `reason` |
-| `relay` | `url`, `token`: the internet relay the server listens at; sent to paired clients only |
+| `relay` | `url`, `room`, `token`: the server's room at the internet relay and this client's token there; sent to paired clients only |
 | `clipboard_text` | `text` copied on the server (up to 60,000 bytes) |
 | `clipboard_files` | `files`: `name` and `size` of each file copied on the server |
 | `pong` | `n` |
@@ -111,6 +111,6 @@ Errors are `error` `message`. Received file names keep only their last component
 
 ## Internet relay
 
-`relay/README.md` describes the relay's endpoints. A relayed connection is a byte stream like TCP, so the handshake and everything after it are the same; the relay sees only Noise ciphertext. A client connects through the relay when the server isn't reachable directly and it knows the server's relay from a `relay` message.
+`relay/README.md` describes the relay's endpoints. A relayed connection is a byte stream like TCP, so the handshake and everything after it are the same; the relay sees only Noise ciphertext. A client connects through the relay when the server isn't reachable directly and it has the server's room and its token from a `relay` message. The server makes its room (256 random bits) and room key once, and a token per paired client at pairing; it keeps the relay's list of allowed token hashes current.
 
 UDP isn't available through the relay. A relayed client opens a datagram connection instead: a further relayed connection with `"datagram": "audio"` or `"datagram": "mic"` in the hello, on which each data frame is one packet, sealed with the stream's packet key as over UDP. `audio_ready` and `mic_ready` have port 0 for relayed clients.

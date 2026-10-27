@@ -66,14 +66,21 @@ struct SettingsView: View {
             }
 
             Section("Internet Relay") {
-                Text("Paired devices reach this Mac through the relay when it isn't on their network. The relay is your own Cloudflare Worker, from relay/ in Portputer's source. Paired devices learn its address and token from this Mac.")
+                Toggle("Reachable Through the Internet Relay", isOn: Binding(
+                    get: { server.relayEnabled },
+                    set: {
+                        server.relayEnabled = $0
+                        server.saveRelay()
+                    }
+                ))
+                Text(server.relayStatus)
+                    .accessibilityAddTraits(.updatesFrequently)
+                Text("Paired devices connect through the relay when this Mac isn't on their network. Only devices paired with this Mac can find or reach it there; the relay passes on encrypted data it can't read.")
+                    .font(.caption)
                     .fixedSize(horizontal: false, vertical: true)
-                TextField("Relay address", text: $server.relayURL, prompt: Text("https://portputer-relay.example.workers.dev"))
-                SecureField("Relay token", text: $server.relayToken)
-                HStack {
-                    Button("Save Relay Settings") { server.saveRelay() }
-                    Text(server.relayStatus)
-                        .accessibilityAddTraits(.updatesFrequently)
+                DisclosureGroup("Custom Relay") {
+                    TextField("Relay address", text: $server.relayCustomURL, prompt: Text(server.relayBuiltIn.isEmpty ? "https://relay.example.workers.dev" : server.relayBuiltIn))
+                    Button("Use This Relay") { server.saveRelay() }
                 }
             }
 

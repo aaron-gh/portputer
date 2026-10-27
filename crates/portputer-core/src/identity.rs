@@ -141,6 +141,15 @@ pub struct PairedClient {
     pub public_key: [u8; 32],
     pub name: String,
     pub paired_at: u64,
+    /// Lets this client in at the internet relay.
+    #[serde(default)]
+    pub relay_token: String,
+}
+
+fn new_token() -> String {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).expect("random bytes");
+    hex::encode(bytes)
 }
 
 /// What a server keeps on disk: its identity and the clients paired with it.
@@ -170,22 +179,37 @@ impl ServerStore {
             .unwrap_or_default()
     }
 
-    /// The internet relay the server listens at, if any.
-    pub fn relay(&self) -> Option<crate::relay::RelayConfig> {
-        std::fs::read(self.dir.join("relay.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<crate::relay::RelayConfig>(&b).ok())
-            .filter(|r| r.is_set())
+    /// The server's room at the internet relay, made the first time.
+    pub fn relay_home(&self) -> crate::relay::RelayHome {
+        if let Some(home) = std::fs::read(self.dir.join("relay.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()) {
+            return home;
+        }
+        let home = crate::relay::RelayHome::new();
+        let _ = self.set_relay_home(&home);
+        home
     }
 
-    pub fn set_relay(&self, relay: Option<&crate::relay::RelayConfig>) -> Result<(), Error> {
-        match relay.filter(|r| r.is_set()) {
-            Some(r) => write_private(&self.dir.join("relay.json"), &serde_json::to_vec_pretty(r)?),
-            None => {
-                let _ = std::fs::remove_file(self.dir.join("relay.json"));
-                Ok(())
-            }
+    pub fn set_relay_home(&self, home: &crate::relay::RelayHome) -> Result<(), Error> {
+        write_private(&self.dir.join("relay.json"), &serde_json::to_vec_pretty(home)?)
+    }
+
+    /// A paired client's relay token, made for clients paired before there
+    /// were tokens.
+    pub fn relay_token(&self, public_key: &[u8; 32]) -> Option<String> {
+        let mut list = self.paired();
+        let client = list.iter_mut().find(|c| &c.public_key == public_key)?;
+        if client.relay_token.is_empty() {
+            client.relay_token = new_token();
+            let token = client.relay_token.clone();
+            self.save_paired(&list).ok()?;
+            return Some(token);
         }
+        Some(client.relay_token.clone())
+    }
+
+    /// The hashes of the paired clients' relay tokens, which the relay lets in.
+    pub fn relay_allowed(&self) -> Vec<String> {
+        self.paired().iter().filter(|c| !c.relay_token.is_empty()).map(|c| crate::relay::token_hash(&c.relay_token)).collect()
     }
 
     pub fn is_paired(&self, public_key: &[u8; 32]) -> bool {
@@ -195,7 +219,7 @@ impl ServerStore {
     pub fn add_paired(&self, public_key: [u8; 32], name: &str) -> Result<(), Error> {
         let mut list = self.paired();
         list.retain(|c| c.public_key != public_key);
-        list.push(PairedClient { id: id_of(&public_key), public_key, name: name.to_string(), paired_at: now_secs() });
+        list.push(PairedClient { id: id_of(&public_key), public_key, name: name.to_string(), paired_at: now_secs(), relay_token: new_token() });
         self.save_paired(&list)
     }
 
@@ -227,9 +251,9 @@ pub struct KnownServer {
     pub macs: Vec<String>,
     #[serde(default)]
     pub last_connected: u64,
-    /// The internet relay the server listens at, which it tells paired clients.
+    /// The server's room at the internet relay and this client's token there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub relay: Option<crate::relay::RelayConfig>,
+    pub relay: Option<crate::relay::RelayAccess>,
 }
 
 #[derive(Serialize, Deserialize)]

@@ -41,7 +41,7 @@ mod id {
     pub const MIC: u16 = 313;
     pub const SEND_FILES: u16 = 314;
     pub const RELAY_URL: u16 = 107;
-    pub const RELAY_TOKEN: u16 = 108;
+    pub const RELAY_ON: u16 = 108;
     pub const RELAY_SAVE: u16 = 109;
     pub const VOLUME: u16 = 305;
     pub const KEYS: u16 = 306;
@@ -69,10 +69,9 @@ struct Controls {
     paired_label: HWND,
     paired: HWND,
     unpair: HWND,
+    relay_on: HWND,
     relay_url_label: HWND,
     relay_url: HWND,
-    relay_token_label: HWND,
-    relay_token: HWND,
     relay_save: HWND,
     relay_status: HWND,
     computers_label: HWND,
@@ -264,12 +263,11 @@ impl App {
             paired_label: l("Paired devices"),
             paired: ui::listbox(hwnd, id::PAIRED),
             unpair: ui::button(hwnd, "Remove Device", id::UNPAIR),
-            relay_url_label: l("Internet relay address"),
+            relay_on: ui::checkbox(hwnd, "Reachable through the internet relay", id::RELAY_ON),
+            relay_url_label: l("Custom relay address (empty for the built-in one)"),
             relay_url: ui::edit(hwnd, id::RELAY_URL, false),
-            relay_token_label: l("Relay token"),
-            relay_token: ui::edit(hwnd, id::RELAY_TOKEN, false),
-            relay_save: ui::button(hwnd, "Save Relay Settings", id::RELAY_SAVE),
-            relay_status: l("Internet relay off."),
+            relay_save: ui::button(hwnd, "Use This Relay", id::RELAY_SAVE),
+            relay_status: l(""),
             computers_label: l("Computers"),
             computers: ui::listbox(hwnd, id::COMPUTERS),
             connect: ui::button(hwnd, "Connect", id::CONNECT),
@@ -301,10 +299,9 @@ impl App {
             quit: ui::button(hwnd, "Quit Portputer", id::QUIT),
         };
         ui::set_text(c.port, &DEFAULT_PORT.to_string());
-        if let Some(relay) = portputer_core::identity::ServerStore::new(server_dir()).relay() {
-            ui::set_text(c.relay_url, &relay.url);
-            ui::set_text(c.relay_token, &relay.token);
-        }
+        let home = portputer_core::identity::ServerStore::new(server_dir()).relay_home();
+        ui::set_checked(c.relay_on, home.enabled);
+        ui::set_text(c.relay_url, home.custom_url.as_deref().unwrap_or(""));
         speech::make_live_region(c.server_status);
         speech::make_live_region(c.status);
         c
@@ -324,9 +321,9 @@ impl App {
         f.row(&[(c.pair_new, 1), (c.code_label, 1), (c.code, 2)], h + 2);
         f.row(&[(c.paired_label, 1)], h);
         f.row(&[(c.paired, 3), (c.unpair, 1)], 64);
-        f.row(&[(c.relay_url_label, 2), (c.relay_token_label, 1)], h);
-        f.row(&[(c.relay_url, 2), (c.relay_token, 1)], h + 2);
-        f.row(&[(c.relay_save, 1), (c.relay_status, 2)], h + 4);
+        f.row(&[(c.relay_on, 1), (c.relay_status, 1)], h);
+        f.row(&[(c.relay_url_label, 1)], h);
+        f.row(&[(c.relay_url, 3), (c.relay_save, 1)], h + 4);
         f.gap(8);
         f.row(&[(c.status, 1)], h);
         f.row(&[(c.computers_label, 1)], h);
@@ -469,7 +466,7 @@ impl App {
             ServerEvent::Disconnected { name, .. } => speech::status(self.c.server_status, &format!("{name} disconnected.")),
             ServerEvent::AudioFailed { message } | ServerEvent::Error { message } => speech::status(self.c.server_status, &message),
             ServerEvent::Relay { listening, message } => {
-                let text = if listening { "Listening at the internet relay.".to_string() } else { format!("Internet relay: {message}") };
+                let text = if listening { "Reachable through the internet relay.".to_string() } else { format!("Internet relay: {message}") };
                 ui::set_text(self.c.relay_status, &text);
             }
             ServerEvent::Listening { .. } | ServerEvent::InputNotAllowed => {}
@@ -735,18 +732,21 @@ impl App {
                 self.refresh();
             }
             id::STARTUP => set_start_at_login(ui::checked(self.c.startup)),
-            id::RELAY_SAVE => {
-                let url = ui::text(self.c.relay_url).trim().to_string();
-                let token = ui::text(self.c.relay_token);
-                let relay = portputer_core::relay::RelayConfig { url, token };
-                let relay = relay.is_set().then_some(relay);
+            id::RELAY_SAVE | id::RELAY_ON => {
+                let enabled = ui::checked(self.c.relay_on);
+                let url = Some(ui::text(self.c.relay_url).trim().to_string()).filter(|u| !u.is_empty());
                 let result = match &self.server {
-                    Some(s) => s.set_relay(relay),
-                    None => portputer_core::identity::ServerStore::new(server_dir()).set_relay(relay.as_ref()),
+                    Some(s) => s.set_relay(enabled, url),
+                    None => {
+                        let store = portputer_core::identity::ServerStore::new(server_dir());
+                        let mut home = store.relay_home();
+                        home.enabled = enabled;
+                        home.custom_url = url;
+                        store.set_relay_home(&home)
+                    }
                 };
-                match result {
-                    Ok(()) => speech::status(self.c.relay_status, "Relay settings saved."),
-                    Err(e) => speech::status(self.c.relay_status, &e.to_string()),
+                if let Err(e) = result {
+                    speech::status(self.c.relay_status, &e.to_string());
                 }
             }
             id::PAIR_NEW => self.new_pairing_code(),

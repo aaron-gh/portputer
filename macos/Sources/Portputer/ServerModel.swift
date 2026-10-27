@@ -17,9 +17,10 @@ final class ServerModel: ObservableObject {
     @Published private(set) var inputAllowed = false
     @Published private(set) var systemComponents = false
     @Published private(set) var microphoneDriver = false
-    @Published var relayURL = ""
-    @Published var relayToken = ""
-    @Published private(set) var relayStatus = "Off."
+    @Published var relayEnabled = true
+    @Published var relayCustomURL = ""
+    @Published private(set) var relayBuiltIn = ""
+    @Published private(set) var relayStatus = "Connecting."
     @Published private(set) var openAtLogin = false
     @Published var status = ""
 
@@ -87,9 +88,10 @@ final class ServerModel: ObservableObject {
     func refresh() {
         paired = handle?.paired() ?? []
         connected = handle?.connected() ?? []
-        if let saved = handle?.relay(), saved.count == 2, relayURL.isEmpty {
-            relayURL = saved[0]
-            relayToken = saved[1]
+        if let settings = handle?.relaySettings() {
+            relayEnabled = settings.enabled
+            relayCustomURL = settings.customUrl
+            relayBuiltIn = settings.builtInUrl
         }
         systemComponents = systemComponentsInstalled()
         microphoneDriver = microphoneDriverInstalled()
@@ -141,11 +143,10 @@ final class ServerModel: ObservableObject {
         openAtLogin = SMAppService.mainApp.status == .enabled
     }
 
-    /// Saves the internet relay settings and starts listening there.
+    /// Saves the internet relay settings and listens there, or stops.
     func saveRelay() {
         do {
-            try handle?.setRelay(url: relayURL.trimmingCharacters(in: .whitespaces), token: relayToken)
-            relayStatus = relayURL.isEmpty ? "Off." : "Connecting."
+            try handle?.setRelay(enabled: relayEnabled, customUrl: relayCustomURL.trimmingCharacters(in: .whitespaces))
             syncLoginWindow()
         } catch {
             relayStatus = error.localizedDescription
@@ -231,7 +232,7 @@ final class ServerModel: ObservableObject {
         case .inputNotAllowed:
             inputAllowed = false
         case .relay(let listening, let message):
-            relayStatus = listening ? "Listening at the relay." : (relayURL.isEmpty ? "Off." : message)
+            relayStatus = listening ? "Reachable through the internet relay." : message
         case .audioFailed(let message):
             status = "Audio: \(message)"
         case .error(let message):

@@ -70,12 +70,32 @@ struct Shared {
     /// on datagram connections.
     mic_inputs: Arc<MicInputs>,
     relay_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The paired clients' relay token hashes, which the relay is kept up
+    /// to date with.
+    relay_allowed: tokio::sync::watch::Sender<Vec<String>>,
     /// The clipboard's change count after Portputer last wrote it, so that
     /// isn't sent back.
     own_clipboard: std::sync::atomic::AtomicI64,
 }
 
 impl Shared {
+    fn refresh_relay_allowed(&self) {
+        let allowed = self.store.relay_allowed();
+        self.relay_allowed.send_if_modified(|current| {
+            let changed = *current != allowed;
+            *current = allowed;
+            changed
+        });
+    }
+
+    /// The relay details for one paired client, when the relay is on.
+    fn relay_message(&self, client_key: &[u8; 32]) -> Option<ServerMessage> {
+        let home = self.store.relay_home();
+        let url = home.url().filter(|_| home.enabled)?;
+        let token = self.store.relay_token(client_key)?;
+        Some(ServerMessage::Relay { url, room: home.room, token })
+    }
+
     fn emit(&self, event: ServerEvent) {
         if let Some(o) = &self.observer {
             o.event(event);
@@ -131,6 +151,7 @@ impl Server {
             clipboard_batch: Default::default(),
             mic_inputs: Default::default(),
             relay_task: Mutex::new(None),
+            relay_allowed: tokio::sync::watch::Sender::new(Vec::new()),
             own_clipboard: std::sync::atomic::AtomicI64::new(-1),
         });
         // PORTPUTER_NO_PROMPT keeps tests from asking for permission.
@@ -207,24 +228,30 @@ impl Server {
         self.shared.store.paired()
     }
 
+    /// Unpairs a client, which also stops letting it in at the relay.
     pub fn unpair(&self, id: &str) -> Result<(), Error> {
-        self.shared.store.remove_paired(id)
+        self.shared.store.remove_paired(id)?;
+        self.shared.refresh_relay_allowed();
+        Ok(())
     }
 
     pub fn connected(&self) -> Vec<ConnectedClient> {
         self.shared.clients.lock().unwrap().values().cloned().collect()
     }
 
-    /// Sets the internet relay to listen at, saved with the server's
-    /// identity, or none.
-    pub fn set_relay(&self, relay: Option<crate::relay::RelayConfig>) -> Result<(), Error> {
-        self.shared.store.set_relay(relay.as_ref())?;
+    /// Turns the internet relay on or off, and sets another relay than the
+    /// built-in one (none for the built-in one).
+    pub fn set_relay(&self, enabled: bool, custom_url: Option<String>) -> Result<(), Error> {
+        let mut home = self.shared.store.relay_home();
+        home.enabled = enabled;
+        home.custom_url = custom_url.filter(|u| !u.trim().is_empty());
+        self.shared.store.set_relay_home(&home)?;
         self.restart_relay();
         Ok(())
     }
 
-    pub fn relay(&self) -> Option<crate::relay::RelayConfig> {
-        self.shared.store.relay()
+    pub fn relay_home(&self) -> crate::relay::RelayHome {
+        self.shared.store.relay_home()
     }
 
     fn restart_relay(&self) {
@@ -232,15 +259,36 @@ impl Server {
         if let Some(task) = self.shared.relay_task.lock().unwrap().take() {
             task.abort();
         }
-        let Some(relay) = self.shared.store.relay() else {
-            self.shared.emit(ServerEvent::Relay { listening: false, message: "Not set.".into() });
+        let home = self.shared.store.relay_home();
+        if !home.enabled {
+            self.shared.emit(ServerEvent::Relay { listening: false, message: "Off.".into() });
+            return;
+        }
+        let Some(url) = home.url() else {
+            self.shared.emit(ServerEvent::Relay { listening: false, message: "This build has no relay address.".into() });
             return;
         };
+        self.shared.relay_allowed.send_replace(self.shared.store.relay_allowed());
+        let refresh = self.shared.clone();
         let accept_shared = self.shared.clone();
         let state_shared = self.shared.clone();
-        let task = runtime.spawn(crate::relay::listen(
-            relay,
-            self.shared.identity.id(),
+        let session = self.shared.session;
+        let allowed = self.shared.relay_allowed.subscribe();
+        let task = runtime.spawn(async move {
+            // Pairings can change in another process too (the app, for the
+            // server at the login window), so the list is read again now and
+            // then as well as when this server pairs or unpairs.
+            let refresher = tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    refresh.refresh_relay_allowed();
+                }
+            });
+            crate::relay::listen(
+            url,
+            home,
+            session,
+            allowed,
             move |stream| {
                 let shared = accept_shared.clone();
                 tokio::spawn(async move {
@@ -256,7 +304,10 @@ impl Server {
                 };
                 state_shared.emit(ServerEvent::Relay { listening, message });
             },
-        ));
+            )
+            .await;
+            refresher.abort();
+        });
         *self.shared.relay_task.lock().unwrap() = Some(task);
     }
 
@@ -361,8 +412,8 @@ async fn serve(shared: Arc<Shared>, stream: transport::BoxStream, address: Optio
     }
     // Only on control connections: transfer connections answer requests.
     if paired {
-        if let Some(relay) = shared.store.relay() {
-            writer.send(&ServerMessage::Relay { url: relay.url, token: relay.token }).await?;
+        if let Some(message) = shared.relay_message(&client_key) {
+            writer.send(&message).await?;
         }
     }
     if paired && !platform::input_allowed(false) {
@@ -404,8 +455,9 @@ async fn serve(shared: Arc<Shared>, stream: transport::BoxStream, address: Optio
                             }
                             shared.emit(ServerEvent::Paired { client_id: client_id.clone(), name: name.clone() });
                             writer.send(&ServerMessage::Paired { proof: reply }).await?;
-                            if let Some(relay) = shared.store.relay() {
-                                writer.send(&ServerMessage::Relay { url: relay.url, token: relay.token }).await?;
+                            shared.refresh_relay_allowed();
+                            if let Some(message) = shared.relay_message(&client_key) {
+                                writer.send(&message).await?;
                             }
                             if !platform::input_allowed(false) {
                                 writer.send(&input_notice()).await?;

@@ -135,9 +135,10 @@ pub enum ServerMessage {
     /// Where to send microphone packets (kind 3, 48 kHz mono, 5 ms), and their key.
     MicReady { port: u16, key: String },
     MicStopped { reason: String },
-    /// The internet relay the server listens at, for paired clients to use
-    /// when it isn't on their network.
-    Relay { url: String, token: String },
+    /// The server's room at the internet relay and this client's token
+    /// there, for when the server isn't on the client's network. Sent to
+    /// paired clients only.
+    Relay { url: String, room: String, token: String },
     /// Text copied on the server.
     ClipboardText { text: String },
     /// Files copied on the server; fetched over a transfer connection.

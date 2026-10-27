@@ -609,6 +609,15 @@ impl ServerObserver for ServerRelay {
 }
 
 #[derive(uniffi::Record, Clone, Debug)]
+pub struct RelaySettings {
+    pub enabled: bool,
+    /// Empty for the built-in relay.
+    pub custom_url: String,
+    /// The relay this build uses by default; empty if it has none.
+    pub built_in_url: String,
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
 pub struct PairedDevice {
     pub id: String,
     pub name: String,
@@ -688,23 +697,29 @@ impl ServerHandle {
         Ok(portputer_core::identity::ServerStore::new(&self.store_dir).remove_paired(&id)?)
     }
 
-    /// Sets the internet relay (the Worker's address and token); an empty
-    /// address turns it off.
-    pub fn set_relay(&self, url: String, token: String) -> Result<(), PortputerError> {
-        let relay = portputer_core::relay::RelayConfig { url, token };
-        let relay = relay.is_set().then_some(relay);
+    /// Turns the internet relay on or off; `custom_url` empty for the
+    /// built-in relay.
+    pub fn set_relay(&self, enabled: bool, custom_url: String) -> Result<(), PortputerError> {
+        let custom = Some(custom_url).filter(|u| !u.trim().is_empty());
         match self.server.lock().unwrap().as_ref() {
-            Some(s) => Ok(s.set_relay(relay)?),
-            None => Ok(portputer_core::identity::ServerStore::new(&self.store_dir).set_relay(relay.as_ref())?),
+            Some(s) => Ok(s.set_relay(enabled, custom)?),
+            None => {
+                let store = portputer_core::identity::ServerStore::new(&self.store_dir);
+                let mut home = store.relay_home();
+                home.enabled = enabled;
+                home.custom_url = custom;
+                Ok(store.set_relay_home(&home)?)
+            }
         }
     }
 
-    /// The relay's address and token, empty when there's none.
-    pub fn relay(&self) -> Vec<String> {
-        portputer_core::identity::ServerStore::new(&self.store_dir)
-            .relay()
-            .map(|r| vec![r.url, r.token])
-            .unwrap_or_default()
+    pub fn relay_settings(&self) -> RelaySettings {
+        let home = portputer_core::identity::ServerStore::new(&self.store_dir).relay_home();
+        RelaySettings {
+            enabled: home.enabled,
+            custom_url: home.custom_url.unwrap_or_default(),
+            built_in_url: portputer_core::relay::default_url().unwrap_or("").to_string(),
+        }
     }
 
     pub fn connected(&self) -> Vec<ConnectedDevice> {

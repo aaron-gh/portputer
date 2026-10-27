@@ -1,38 +1,40 @@
 # Portputer relay
 
-A Cloudflare Worker that connects paired devices to computers that aren't on their network. The computer keeps a WebSocket open to the relay; a device that can't reach the computer directly connects through it. Portputer's encryption runs end to end inside: the relay only passes ciphertext on, and a relay posing as the computer fails the device's key check. Audio and the microphone go through it too, over WebSockets instead of UDP, with a larger audio buffer.
+A Cloudflare Worker that connects paired devices to computers that aren't on their network. Nobody sets anything up: the relay's address is built into the apps, every computer is reachable through it unless turned off, and devices learn what they need when they pair.
 
-Uses Durable Objects (one per computer), which the Workers Free plan includes.
+## Privacy
 
-## Deploying
+- Each computer makes a room the first time it runs: a random 256-bit name, and a key that proves the room is its own. The key never leaves the computer.
+- When a device pairs, the computer gives it the room and a token for that device alone, over Portputer's encrypted connection. The computer keeps the hashes of its paired devices' tokens at the relay; unpairing a device takes its token out at once.
+- The relay lets in only a token the computer allows, and only the room's key can listen or answer. There is no list of rooms. A wrong token, a wrong key and a room that doesn't exist all get the same 404, so nothing can be found by guessing.
+- Portputer's own encryption (Noise) runs end to end inside each relayed connection: the relay passes on ciphertext it can't read, and a relay posing as a computer fails the device's key check. The relay sees room names, IP addresses and how much data passes.
 
-From this folder, with Node.js:
+## Deploying (once, for everyone)
+
+From this folder, with Node.js and a Cloudflare account:
 
     npm install
     npx wrangler login
-    npx wrangler secret put RELAY_TOKEN    # any long random text
     npx wrangler deploy
 
-Wrangler prints the Worker's address, such as `https://portputer-relay.<account>.workers.dev`.
+Put the address Wrangler prints, such as `https://portputer-relay.<account>.workers.dev`, in `relay/relay-url.txt`. The build scripts (`macos/build.sh`, `windows/build.sh`, `android/build-rust.sh`) build it into the apps. A computer can use another relay instead: Settings, Internet Relay, Custom Relay.
 
-Then, on each computer: Portputer Settings, Internet Relay, enter the address and the token, Save Relay Settings. The status says "Listening at the relay." Devices learn the address and token from the computer the next time they connect on the local network, or when they pair; after that, when the computer isn't on their network, they connect through the relay by themselves.
+Durable Objects (one per computer) are included in the Workers Free plan. Audio through the relay is one WebSocket message per 5 ms packet, which counts against the plan's Durable Object requests: about 3 hours of audio a day fits the free plan; the paid plan ($5 a month) covers far more.
 
 ## Testing locally
 
-    echo RELAY_TOKEN=testtoken > .dev.vars
     npx wrangler dev --port 8787
     # in another terminal, from the repository root:
-    PORTPUTER_RELAY_TEST_URL=http://127.0.0.1:8787 PORTPUTER_RELAY_TEST_TOKEN=testtoken \
-        cargo test -p portputer-core --test pairing through_relay
+    PORTPUTER_RELAY_TEST_URL=http://127.0.0.1:8787 cargo test -p portputer-core --test pairing through_relay
 
 ## Endpoints
 
-All WebSocket, with `?token=<RELAY_TOKEN>`; `<id>` is the computer's Portputer ID.
+All WebSocket. `<room>` is 64 hex digits.
 
 | Path | Who | What |
 |---|---|---|
-| `/listen/<id>` | computer | Held open; receives `{"type":"incoming","conn":"<conn>"}` for each device. A newer listener replaces an older one. Text `ping` is answered `pong`. |
-| `/connect/<id>` | device | One relayed connection. 503 if the computer isn't listening. |
-| `/accept/<id>/<conn>` | computer | Its end of that connection. |
+| `/listen/<room>?key=<k>&session=<user\|login_window>` | computer | Held open. The first listener claims the room with its key. Sends `{"type":"allow","tokens":[<sha256 of each token>]}`; receives `{"type":"incoming","conn":"<conn>"}` for each device. Text `ping` is answered `pong`. |
+| `/connect/<room>?token=<t>` | device | One relayed connection, to the logged-in user's server, or the login window's if there's no user's. 503 if neither is listening. |
+| `/accept/<room>/<conn>?key=<k>` | computer | Its end of that connection. |
 
 Binary messages are passed to the other end unchanged; closing either end closes the other.

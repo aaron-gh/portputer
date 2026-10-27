@@ -19,6 +19,10 @@ if [[ "${1:-}" == "--debug" ]]; then
     CARGO_FLAGS=()
 fi
 CARGO="${CARGO:-$(command -v cargo || echo "$HOME/.cargo/bin/cargo")}"
+# The built-in relay: relay/relay-url.txt, once the Worker is deployed.
+if [[ -z "${PORTPUTER_RELAY_URL:-}" && -f relay/relay-url.txt ]]; then
+    export PORTPUTER_RELAY_URL=$(tr -d '[:space:]' < relay/relay-url.txt)
+fi
 
 echo "Building the Rust core and the agent."
 "$CARGO" build ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"} -p portputer-ffi -p portputer-agent

@@ -20,6 +20,10 @@ HOST_TAG=$(ls "$NDK/toolchains/llvm/prebuilt" | head -1)
 BIN="$NDK/toolchains/llvm/prebuilt/$HOST_TAG/bin"
 API=26
 APP="$ROOT/android/app/src/main"
+# The built-in relay: relay/relay-url.txt, once the Worker is deployed.
+if [[ -z "${PORTPUTER_RELAY_URL:-}" && -f relay/relay-url.txt ]]; then
+    export PORTPUTER_RELAY_URL=$(tr -d '[:space:]' < relay/relay-url.txt)
+fi
 
 build() {
     local triple=$1 abi=$2 clang_triple=$3

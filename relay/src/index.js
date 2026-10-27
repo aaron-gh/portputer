@@ -1,17 +1,31 @@
-// Portputer's internet relay: a Cloudflare Worker that joins a client's
-// WebSocket to a computer's, for computers not on the client's network.
+// Portputer's internet relay: a Cloudflare Worker that joins a paired
+// device's WebSocket to its computer's, for computers not on the device's
+// network.
 //
-// One Durable Object per computer, named by its Portputer ID.
-//   GET /listen/<id>         the computer, all the time: told of each client
-//   GET /connect/<id>        a client: one relayed connection
-//   GET /accept/<id>/<conn>  the computer's side of that connection
-// Every request needs ?token=<RELAY_TOKEN> when that secret is set.
+// Each computer has a room: a random 256-bit name only it and its paired
+// devices know. There is no way to list rooms, and every refusal looks the
+// same as a room that doesn't exist, so rooms can't be found by guessing.
+//
+//   GET /listen/<room>?key=<k>&session=<user|login_window>
+//       The computer, all the time. The first listener claims the room with
+//       its key; later listeners need the same key. It sends the hashes of
+//       its paired devices' tokens ({"type":"allow","tokens":[...]}) and is
+//       told of each device that connects ({"type":"incoming","conn":...}).
+//   GET /connect/<room>?token=<t>
+//       A paired device: one relayed connection. Only tokens the computer
+//       allows get in.
+//   GET /accept/<room>/<conn>?key=<k>
+//       The computer's end of that connection.
 //
 // Bytes are passed through as they are. Portputer's own encryption (Noise)
-// runs inside, end to end: the relay sees only ciphertext, and a relay
-// pretending to be the computer fails the client's key check.
+// runs inside, end to end: the relay sees only ciphertext.
 
-const LISTENER = "listen";
+const NOT_FOUND = () => new Response("Not found\n", { status: 404 });
+
+async function sha256(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 export default {
   async fetch(request, env) {
@@ -20,51 +34,67 @@ export default {
     if (parts.length === 0) {
       return new Response("Portputer relay\n");
     }
-    const [kind, id] = parts;
-    if (!["listen", "connect", "accept"].includes(kind) || !/^[0-9a-f]{32}$/.test(id ?? "")) {
-      return new Response("Not found\n", { status: 404 });
-    }
-    if (env.RELAY_TOKEN && url.searchParams.get("token") !== env.RELAY_TOKEN) {
-      return new Response("Wrong relay token\n", { status: 403 });
+    const [kind, room] = parts;
+    if (!["listen", "connect", "accept"].includes(kind) || !/^[0-9a-f]{64}$/.test(room ?? "")) {
+      return NOT_FOUND();
     }
     if (request.headers.get("Upgrade") !== "websocket") {
       return new Response("WebSocket only\n", { status: 426 });
     }
-    const room = env.ROOMS.get(env.ROOMS.idFromName(id));
-    return room.fetch(request);
+    return env.ROOMS.get(env.ROOMS.idFromName(room)).fetch(request);
   },
 };
 
 export class Room {
   constructor(state) {
     this.state = state;
-    // Messages from a client before the computer's side of its connection
+    // Messages from a device before the computer's end of its connection
     // arrives, by connection.
     this.waiting = new Map();
     // The computer's keep-alives are answered without waking the object.
     state.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
   }
 
+  async keyMatches(key) {
+    if (!key) return false;
+    const claim = await this.state.storage.get("claim");
+    return claim !== undefined && claim === (await sha256(key));
+  }
+
   async fetch(request) {
-    const parts = new URL(request.url).pathname.split("/").filter(Boolean);
-    const [kind, , conn] = parts;
+    const url = new URL(request.url);
+    const [kind, , conn] = url.pathname.split("/").filter(Boolean);
     const { 0: outside, 1: inside } = new WebSocketPair();
 
     if (kind === "listen") {
-      for (const old of this.state.getWebSockets(LISTENER)) {
+      const key = url.searchParams.get("key");
+      if (!key || key.length < 32) return NOT_FOUND();
+      const claim = await this.state.storage.get("claim");
+      if (claim === undefined) {
+        await this.state.storage.put("claim", await sha256(key));
+      } else if (claim !== (await sha256(key))) {
+        return NOT_FOUND();
+      }
+      const session = url.searchParams.get("session") === "login_window" ? "login_window" : "user";
+      for (const old of this.state.getWebSockets("listen:" + session)) {
         old.close(4000, "Another listener took over");
       }
-      this.state.acceptWebSocket(inside, [LISTENER]);
+      this.state.acceptWebSocket(inside, ["listen", "listen:" + session]);
     } else if (kind === "connect") {
-      const listeners = this.state.getWebSockets(LISTENER);
-      if (listeners.length === 0) {
+      const token = url.searchParams.get("token");
+      const allowed = (await this.state.storage.get("allow")) ?? [];
+      if (!token || !allowed.includes(await sha256(token))) return NOT_FOUND();
+      // The logged-in user's server first, then the one at the login window.
+      const listener = this.state.getWebSockets("listen:user")[0] ?? this.state.getWebSockets("listen:login_window")[0];
+      if (!listener) {
         return new Response("The computer isn't connected to the relay\n", { status: 503 });
       }
       const id = crypto.randomUUID();
       this.state.acceptWebSocket(inside, ["client:" + id]);
       this.waiting.set(id, []);
-      listeners[0].send(JSON.stringify({ type: "incoming", conn: id }));
+      listener.send(JSON.stringify({ type: "incoming", conn: id }));
     } else if (kind === "accept") {
+      if (!(await this.keyMatches(url.searchParams.get("key")))) return NOT_FOUND();
       if (!conn || this.state.getWebSockets("client:" + conn).length === 0) {
         return new Response("No such connection\n", { status: 410 });
       }
@@ -73,20 +103,35 @@ export class Room {
         inside.send(message);
       }
       this.waiting.delete(conn);
+    } else {
+      return NOT_FOUND();
     }
     return new Response(null, { status: 101, webSocket: outside });
   }
 
   /** The other end of a relayed connection, if it's there. */
   peer(ws) {
-    const tag = this.state.getTags(ws).find((t) => t.includes(":"));
-    if (!tag) return { tag: null, peer: null };
+    const tag = this.state.getTags(ws).find((t) => t.startsWith("client:") || t.startsWith("server:"));
+    if (!tag) return {};
     const [side, conn] = tag.split(":");
     const other = (side === "client" ? "server:" : "client:") + conn;
     return { side, conn, peer: this.state.getWebSockets(other)[0] ?? null };
   }
 
-  webSocketMessage(ws, message) {
+  async webSocketMessage(ws, message) {
+    if (this.state.getTags(ws).includes("listen")) {
+      // The computer's list of paired devices' token hashes.
+      if (typeof message === "string") {
+        try {
+          const m = JSON.parse(message);
+          if (m.type === "allow" && Array.isArray(m.tokens)) {
+            const tokens = m.tokens.filter((t) => typeof t === "string" && /^[0-9a-f]{64}$/.test(t)).slice(0, 256);
+            await this.state.storage.put("allow", tokens);
+          }
+        } catch {}
+      }
+      return;
+    }
     const { side, conn, peer } = this.peer(ws);
     if (!side) return;
     if (peer) {
@@ -96,13 +141,13 @@ export class Room {
     }
   }
 
-  webSocketClose(ws, code, reason) {
+  webSocketClose(ws) {
     const { conn, peer } = this.peer(ws);
     if (conn) this.waiting.delete(conn);
     if (peer) peer.close(1000, "The other side closed");
   }
 
   webSocketError(ws) {
-    this.webSocketClose(ws, 1011, "error");
+    this.webSocketClose(ws);
   }
 }

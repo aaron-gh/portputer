@@ -12,6 +12,10 @@ cd "$(dirname "$0")/.."
 CARGO="${CARGO:-$(command -v cargo || echo "$HOME/.cargo/bin/cargo")}"
 RUSTUP="${RUSTUP:-$(command -v rustup || echo "$HOME/.cargo/bin/rustup")}"
 TARGET=x86_64-pc-windows-gnu
+# The built-in relay: relay/relay-url.txt, once the Worker is deployed.
+if [[ -z "${PORTPUTER_RELAY_URL:-}" && -f relay/relay-url.txt ]]; then
+    export PORTPUTER_RELAY_URL=$(tr -d '[:space:]' < relay/relay-url.txt)
+fi
 
 # Homebrew's bin, for shells that don't have it on their path.
 for dir in /opt/homebrew/bin /usr/local/bin; do

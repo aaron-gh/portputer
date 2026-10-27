@@ -2,51 +2,99 @@
 //! is a WebSocket, turned here into a byte stream the control protocol runs
 //! over unchanged, Noise and all. The relay only passes bytes on.
 //!
-//! The server keeps a listening WebSocket open and is told of each client;
-//! it then opens a WebSocket of its own for that client's connection.
+//! Nothing is typed. Each computer makes its own room (a random 256-bit
+//! name) and room key the first time it runs, and gives each device it pairs
+//! with the room and a token of that device's own, over the encrypted
+//! connection. At the relay, the computer claims its room with the key and
+//! keeps the hashes of its paired devices' tokens there; only those tokens
+//! get in, and unpairing a device takes its token out. Every refusal looks
+//! the same as a room that doesn't exist.
 
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_tungstenite::tungstenite::{self, Message};
 
 use crate::Error;
+use crate::protocol::SessionKind;
 use crate::transport::BoxStream;
 
+/// The relay the apps use unless a computer is set to another: the
+/// PORTPUTER_RELAY_URL the build had, from relay/relay-url.txt.
+pub fn default_url() -> Option<&'static str> {
+    option_env!("PORTPUTER_RELAY_URL").filter(|u| !u.trim().is_empty())
+}
+
+fn random_hex() -> String {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).expect("random bytes");
+    hex::encode(bytes)
+}
+
+/// A device's token as the relay keeps it.
+pub fn token_hash(token: &str) -> String {
+    hex::encode(Sha256::digest(token.as_bytes()))
+}
+
+/// A computer's place at the relay, made once and kept with its identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayHome {
+    /// On unless turned off.
+    pub enabled: bool,
+    /// Another relay than the built-in one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_url: Option<String>,
+    pub room: String,
+    /// Proves to the relay that the room is this computer's. Never sent to
+    /// devices.
+    pub key: String,
+}
+
+impl RelayHome {
+    pub fn new() -> RelayHome {
+        RelayHome { enabled: true, custom_url: None, room: random_hex(), key: random_hex() }
+    }
+
+    pub fn url(&self) -> Option<String> {
+        self.custom_url.clone().filter(|u| !u.trim().is_empty()).or_else(|| default_url().map(String::from))
+    }
+}
+
+impl Default for RelayHome {
+    fn default() -> Self {
+        RelayHome::new()
+    }
+}
+
+/// What a paired device needs to reach its computer through the relay.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct RelayConfig {
-    /// Such as https://portputer-relay.example.workers.dev
+pub struct RelayAccess {
     pub url: String,
-    /// The Worker's RELAY_TOKEN.
-    #[serde(default)]
+    pub room: String,
     pub token: String,
 }
 
-impl RelayConfig {
-    pub fn is_set(&self) -> bool {
-        !self.url.trim().is_empty()
-    }
-
-    fn endpoint(&self, path: &str) -> String {
-        let base = self.url.trim().trim_end_matches('/');
-        let base = if let Some(rest) = base.strip_prefix("https://") {
-            format!("wss://{rest}")
-        } else if let Some(rest) = base.strip_prefix("http://") {
-            format!("ws://{rest}")
-        } else if base.starts_with("ws://") || base.starts_with("wss://") {
-            base.to_string()
-        } else {
-            format!("wss://{base}")
-        };
-        let token: String = self
-            .token
-            .bytes()
+fn endpoint(url: &str, path: &str, query: &[(&str, &str)]) -> String {
+    let base = url.trim().trim_end_matches('/');
+    let base = if let Some(rest) = base.strip_prefix("https://") {
+        format!("wss://{rest}")
+    } else if let Some(rest) = base.strip_prefix("http://") {
+        format!("ws://{rest}")
+    } else if base.starts_with("ws://") || base.starts_with("wss://") {
+        base.to_string()
+    } else {
+        format!("wss://{base}")
+    };
+    let encode = |s: &str| -> String {
+        s.bytes()
             .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
-            .collect();
-        format!("{base}/{path}?token={token}")
-    }
+            .collect()
+    };
+    let query: Vec<String> = query.iter().map(|(k, v)| format!("{k}={}", encode(v))).collect();
+    format!("{base}/{path}?{}", query.join("&"))
 }
 
 fn install_crypto() {
@@ -58,16 +106,12 @@ fn install_crypto() {
 
 fn describe(e: tungstenite::Error) -> Error {
     match e {
-        tungstenite::Error::Http(response) => {
-            let status = response.status().as_u16();
-            let message = match status {
-                503 => "The computer isn't connected to the relay.".to_string(),
-                403 => "The relay refused the token.".to_string(),
-                410 => "The relayed connection had already closed.".to_string(),
-                other => format!("The relay answered {other}."),
-            };
-            Error::Refused(message)
-        }
+        tungstenite::Error::Http(response) => Error::Refused(match response.status().as_u16() {
+            503 => "The computer isn't connected to the relay.".to_string(),
+            404 => "The relay refused this device: it isn't paired with the computer any more, or the computer hasn't been through the relay yet.".to_string(),
+            410 => "The relayed connection had already closed.".to_string(),
+            other => format!("The relay answered {other}."),
+        }),
         other => Error::Protocol(format!("relay: {other}")),
     }
 }
@@ -112,9 +156,9 @@ async fn open_stream(url: &str) -> Result<BoxStream, Error> {
     Ok(Box::new(ours))
 }
 
-/// A client's connection to a server through the relay.
-pub async fn connect(relay: &RelayConfig, server_id: &str) -> Result<BoxStream, Error> {
-    open_stream(&relay.endpoint(&format!("connect/{server_id}"))).await
+/// A device's connection to its computer through the relay.
+pub async fn connect(access: &RelayAccess) -> Result<BoxStream, Error> {
+    open_stream(&endpoint(&access.url, &format!("connect/{}", access.room), &[("token", &access.token)])).await
 }
 
 #[derive(Deserialize)]
@@ -122,31 +166,42 @@ struct Incoming {
     conn: String,
 }
 
-/// Keeps the server listening at the relay, reconnecting after failures,
-/// and hands each relayed client connection to `accept`. `on_state` says
+/// Keeps the computer listening in its room, reconnecting after failures,
+/// with the relay kept up to date with `allowed` (paired devices' token
+/// hashes). Each relayed connection is handed to `accept`; `on_state` says
 /// whether it's listening, and why not.
 pub async fn listen(
-    relay: RelayConfig,
-    server_id: String,
+    url: String,
+    home: RelayHome,
+    session: SessionKind,
+    mut allowed: tokio::sync::watch::Receiver<Vec<String>>,
     accept: impl Fn(BoxStream) + Send + Sync + 'static,
     on_state: impl Fn(Result<(), String>) + Send + Sync + 'static,
 ) {
     install_crypto();
+    let session_name = match session {
+        SessionKind::User => "user",
+        SessionKind::LoginWindow => "login_window",
+    };
     let mut wait = Duration::from_secs(2);
     loop {
-        let url = relay.endpoint(&format!("listen/{server_id}"));
-        match tokio::time::timeout(Duration::from_secs(15), tokio_tungstenite::connect_async(&url)).await {
+        let listen_url = endpoint(&url, &format!("listen/{}", home.room), &[("key", &home.key), ("session", session_name)]);
+        match tokio::time::timeout(Duration::from_secs(15), tokio_tungstenite::connect_async(&listen_url)).await {
             Ok(Ok((ws, _))) => {
                 wait = Duration::from_secs(2);
-                on_state(Ok(()));
                 let (mut sink, mut source) = ws.split();
+                let allow = |tokens: &Vec<String>| Message::Text(serde_json::json!({ "type": "allow", "tokens": tokens }).to_string().into());
+                let first = allow(&allowed.borrow_and_update());
+                if sink.send(first).await.is_ok() {
+                    on_state(Ok(()));
+                }
                 let mut ping = tokio::time::interval(Duration::from_secs(30));
                 loop {
                     tokio::select! {
                         message = source.next() => match message {
                             Some(Ok(Message::Text(text))) => {
                                 if let Ok(incoming) = serde_json::from_str::<Incoming>(&text) {
-                                    let url = relay.endpoint(&format!("accept/{server_id}/{}", incoming.conn));
+                                    let url = endpoint(&url, &format!("accept/{}/{}", home.room, incoming.conn), &[("key", &home.key)]);
                                     match open_stream(&url).await {
                                         Ok(stream) => accept(stream),
                                         Err(e) => tracing::warn!("relay accept: {e}"),
@@ -156,6 +211,15 @@ pub async fn listen(
                             Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                             Some(Ok(_)) => {}
                         },
+                        changed = allowed.changed() => {
+                            if changed.is_err() {
+                                return;
+                            }
+                            let update = allow(&allowed.borrow_and_update());
+                            if sink.send(update).await.is_err() {
+                                break;
+                            }
+                        }
                         _ = ping.tick() => {
                             if sink.send(Message::Text("ping".into())).await.is_err() {
                                 break;
@@ -179,9 +243,14 @@ mod tests {
 
     #[test]
     fn endpoints() {
-        let r = RelayConfig { url: "https://relay.example.workers.dev/".into(), token: "a b&c".into() };
-        assert_eq!(r.endpoint("listen/x"), "wss://relay.example.workers.dev/listen/x?token=a%20b%26c");
-        let local = RelayConfig { url: "http://127.0.0.1:8787".into(), token: String::new() };
-        assert_eq!(local.endpoint("connect/y"), "ws://127.0.0.1:8787/connect/y?token=");
+        assert_eq!(
+            endpoint("https://relay.example.workers.dev/", "connect/ab", &[("token", "a b&c")]),
+            "wss://relay.example.workers.dev/connect/ab?token=a%20b%26c"
+        );
+        assert_eq!(endpoint("http://127.0.0.1:8787", "listen/x", &[("key", "k"), ("session", "user")]), "ws://127.0.0.1:8787/listen/x?key=k&session=user");
+        let home = RelayHome::new();
+        assert_eq!(home.room.len(), 64);
+        assert_ne!(home.room, home.key);
+        assert_eq!(token_hash("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     }
 }

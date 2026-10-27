@@ -169,7 +169,7 @@ fn seen() -> &'static Mutex<HashMap<String, Vec<ServerAd>>> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Endpoint {
     Tcp(String, u16),
-    Relay(crate::relay::RelayConfig),
+    Relay(crate::relay::RelayAccess),
 }
 
 async fn connect_once(
@@ -193,10 +193,7 @@ async fn connect_once(
             stream.set_nodelay(true)?;
             (Box::new(stream), Some(addr.ip()), host.clone(), *port)
         }
-        Endpoint::Relay(relay) => {
-            let id = expected.ok_or_else(|| Error::Protocol("the relay needs the computer's ID".into()))?;
-            (crate::relay::connect(relay, id).await?, None, String::new(), 0)
-        }
+        Endpoint::Relay(relay) => (crate::relay::connect(relay).await?, None, String::new(), 0),
     };
     let hello = serde_json::to_vec(&ClientMessage::Hello {
         name: name.to_string(),
@@ -745,9 +742,9 @@ impl Supervisor {
                                 }
                             }
                         }
-                        ServerMessage::Relay { url, token } => {
+                        ServerMessage::Relay { url, room, token } => {
                             if info.trusted {
-                                let relay = crate::relay::RelayConfig { url, token };
+                                let relay = crate::relay::RelayAccess { url, room, token };
                                 let _ = self.store.update(&info.id, |s| s.relay = Some(relay));
                             }
                         }
