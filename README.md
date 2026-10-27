@@ -64,7 +64,7 @@ With FileVault on, a normal restart stops at the FileVault unlock screen, where 
 
 Untested and uncertain: whether macOS lets the login window server post key events and capture audio without further permission. If keys don't arrive at the login window, add `/Library/Application Support/Portputer/portputer-agent` in System Settings, Privacy & Security, Accessibility. Logs: `/Library/Logs/Portputer/`.
 
-Build: `macos/build.sh` (release) or `macos/build.sh --debug`, into `macos/build/Portputer.app`. macOS 14.2 or later (Core Audio process taps). macOS keeps permissions by code signature. build.sh signs with a "Portputer Code Signing" certificate if there is one, otherwise an Apple Development certificate, so permissions last across rebuilds; an ad-hoc signed build loses them each time.
+Build: `macos/build.sh` (release) or `macos/build.sh --debug`, into `macos/build/Portputer.app`. macOS 14.2 or later (Core Audio process taps). macOS keeps permissions by code signature. build.sh signs with Portputer's own self-signed certificate, "Portputer Code Signing", which `macos/make-certificate.sh` makes in the login keychain, so permissions last across rebuilds. Without it, it uses an Apple Development certificate, or signs ad hoc, which loses permissions at every rebuild.
 
 ## Windows app
 

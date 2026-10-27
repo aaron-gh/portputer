@@ -4,8 +4,9 @@
 #   macos/build.sh            release build into macos/build/Portputer.app
 #   macos/build.sh --debug    debug build, quicker to compile
 #
-# PORTPUTER_SIGN_IDENTITY signs with a certificate; otherwise a "Portputer
-# Code Signing" certificate, then an Apple Development one, then ad hoc. macOS remembers the Accessibility and audio permissions by
+# PORTPUTER_SIGN_IDENTITY signs with a certificate; otherwise Portputer's own
+# self-signed "Portputer Code Signing" (macos/make-certificate.sh makes it),
+# then an Apple Development certificate, then ad hoc. macOS remembers the Accessibility and audio permissions by
 # signature, so an ad-hoc build loses them every time it's rebuilt.
 set -euo pipefail
 
@@ -61,7 +62,8 @@ BUILD_NUMBER="${PORTPUTER_BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null 
 SIGN_ID="${PORTPUTER_SIGN_IDENTITY:-}"
 if [[ -z "$SIGN_ID" ]]; then
     DEV_ID=$(security find-identity -v -p codesigning | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)
-    if security find-identity -v -p codesigning | grep -q '"Portputer Code Signing"'; then
+    # Self-signed, so not "valid" to find-identity -v, but codesign uses it.
+    if security find-identity -p codesigning | grep -q '"Portputer Code Signing"'; then
         SIGN_ID="Portputer Code Signing"
     elif [[ -n "$DEV_ID" ]]; then
         SIGN_ID="$DEV_ID"
