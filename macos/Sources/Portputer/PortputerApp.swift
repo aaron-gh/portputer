@@ -9,11 +9,14 @@ struct PortputerApp: App {
     @StateObject private var updater = Updater.shared
 
     var body: some Scene {
-        MenuBarExtra("Portputer", systemImage: "keyboard.badge.ellipsis") {
+        // The name as text, not a symbol.
+        MenuBarExtra {
             MenuContent()
                 .environmentObject(server)
                 .environmentObject(client)
                 .environmentObject(updater)
+        } label: {
+            Text("Portputer")
         }
 
         Window("Portputer Settings", id: Windows.settings) {
