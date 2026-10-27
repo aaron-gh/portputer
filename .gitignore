@@ -11,3 +11,6 @@
 /android/app/src/main/java/uniffi
 /android/local.properties
 /windows/build
+/windows/dist
+/macos/dist
+/android/dist
