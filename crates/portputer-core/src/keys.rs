@@ -542,3 +542,54 @@ mod tests {
         assert_eq!(label("Numpad7", Os::Mac), "Keypad 7");
     }
 }
+
+/// The key (W3C code) and whether Shift is needed for a character on a US
+/// keyboard, for typing text where only keys can be sent.
+pub fn us_key_for_char(c: char) -> Option<(&'static str, bool)> {
+    const LETTERS: [&str; 26] = [
+        "KeyA", "KeyB", "KeyC", "KeyD", "KeyE", "KeyF", "KeyG", "KeyH", "KeyI", "KeyJ", "KeyK", "KeyL", "KeyM", "KeyN",
+        "KeyO", "KeyP", "KeyQ", "KeyR", "KeyS", "KeyT", "KeyU", "KeyV", "KeyW", "KeyX", "KeyY", "KeyZ",
+    ];
+    const DIGITS: [&str; 10] = ["Digit0", "Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6", "Digit7", "Digit8", "Digit9"];
+    Some(match c {
+        'a'..='z' => (LETTERS[c as usize - 'a' as usize], false),
+        'A'..='Z' => (LETTERS[c as usize - 'A' as usize], true),
+        '0'..='9' => (DIGITS[c as usize - '0' as usize], false),
+        ')' => ("Digit0", true),
+        '!' => ("Digit1", true),
+        '@' => ("Digit2", true),
+        '#' => ("Digit3", true),
+        '$' => ("Digit4", true),
+        '%' => ("Digit5", true),
+        '^' => ("Digit6", true),
+        '&' => ("Digit7", true),
+        '*' => ("Digit8", true),
+        '(' => ("Digit9", true),
+        ' ' => ("Space", false),
+        '\n' => ("Enter", false),
+        '\t' => ("Tab", false),
+        '-' => ("Minus", false),
+        '_' => ("Minus", true),
+        '=' => ("Equal", false),
+        '+' => ("Equal", true),
+        '[' => ("BracketLeft", false),
+        '{' => ("BracketLeft", true),
+        ']' => ("BracketRight", false),
+        '}' => ("BracketRight", true),
+        '\\' => ("Backslash", false),
+        '|' => ("Backslash", true),
+        ';' => ("Semicolon", false),
+        ':' => ("Semicolon", true),
+        '\'' => ("Quote", false),
+        '"' => ("Quote", true),
+        ',' => ("Comma", false),
+        '<' => ("Comma", true),
+        '.' => ("Period", false),
+        '>' => ("Period", true),
+        '/' => ("Slash", false),
+        '?' => ("Slash", true),
+        '`' => ("Backquote", false),
+        '~' => ("Backquote", true),
+        _ => return None,
+    })
+}

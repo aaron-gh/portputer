@@ -5,6 +5,8 @@ use crate::keys;
 use crate::protocol::{PowerAction, SessionKind};
 
 #[cfg(target_os = "macos")]
+pub mod hid;
+#[cfg(target_os = "macos")]
 pub mod macos;
 #[cfg(windows)]
 pub mod windows;

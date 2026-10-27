@@ -189,10 +189,8 @@ pub struct Strategy {
     pub tap: CGEventTapLocation,
 }
 
-/// The first is the usual one. At the login window, making events with the
-/// HID system state's source can hang inside SkyLight, and events made with
-/// none appear to be dropped, so the key process tries each of these there
-/// and uses the first that macOS registers.
+/// The first is the usual one; the others are fallbacks for the login
+/// window's key process.
 pub const STRATEGIES: [Strategy; 6] = [
     Strategy { name: "HID system source, HID tap", source: Some(CGEventSourceStateID::HIDSystemState), tap: CGEventTapLocation::HIDEventTap },
     Strategy { name: "private source, HID tap", source: Some(CGEventSourceStateID::Private), tap: CGEventTapLocation::HIDEventTap },
@@ -215,6 +213,21 @@ pub fn probe_strategy(index: usize) -> String {
     format!("hid={hid} session={session}")
 }
 
+/// Whether keys through IOKit's HID system register here: Shift goes down,
+/// the HID state is read, and Shift goes up. (Not for the login window,
+/// where reading the state hangs.)
+pub fn probe_hid() -> String {
+    let mut injector = match super::hid::HidInjector::open() {
+        Ok(i) => i,
+        Err(e) => return e,
+    };
+    injector.key("ShiftLeft", true);
+    std::thread::sleep(Duration::from_millis(60));
+    let hid = CGEventSource::key_state(CGEventSourceStateID::HIDSystemState, 56);
+    injector.key("ShiftLeft", false);
+    format!("hid={hid}")
+}
+
 /// A key command for the key process at the login window, one JSON line
 /// each; it answers each with a line once it's done.
 #[derive(Serialize, Deserialize, Debug)]
@@ -228,13 +241,11 @@ pub enum InjectCommand {
 }
 
 /// Keys at the login window, through a child process (`portputer-agent
-/// inject`). There, making a key event can hang for good inside SkyLight
-/// (CGSEventSourceForID waits on a lock it holds itself), and some ways of
-/// posting are dropped. Before the first key, each of [`STRATEGIES`] is
-/// tried in a process of its own (`inject --probe N`, 1.5 seconds each) and
-/// the first that macOS registers is used; a key that isn't done within 1.5
-/// seconds has the process replaced with the next strategy, and is sent once
-/// more.
+/// inject`). There, making a Quartz key event can hang for good inside
+/// SkyLight (CGSEventSourceForID waits on a lock it holds itself), and
+/// events made without a source are dropped, so keys go through IOKit's HID
+/// system (platform::hid). A key that isn't done within 1.5 seconds has the
+/// process replaced with the next way of posting, and is sent once more.
 pub struct ChildInjector {
     child: Option<std::process::Child>,
     stdin: Option<std::process::ChildStdin>,
@@ -270,44 +281,9 @@ impl ChildInjector {
         ChildInjector { child: None, stdin: None, acks: None, strategy: None }
     }
 
-    /// Tries each strategy in a process of its own; the first macOS
-    /// registers, or else the first that didn't hang.
-    fn choose(&mut self) -> usize {
-        let mut chosen = None;
-        let mut returned = None;
-        for i in 0..STRATEGIES.len() {
-            let result = match spawn_injector(&["--probe".into(), i.to_string()]) {
-                Some((mut child, rx)) => {
-                    let line = rx.recv_timeout(Duration::from_millis(1500)).unwrap_or_else(|_| "didn't return".into());
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    line
-                }
-                None => "couldn't start".into(),
-            };
-            tracing::info!("key strategy {i} ({}): {result}", STRATEGIES[i].name);
-            if chosen.is_none() && result.contains("=true") {
-                chosen = Some(i);
-            }
-            if returned.is_none() && result.starts_with("hid=") {
-                returned = Some(i);
-            }
-        }
-        // None registered: the first that didn't hang.
-        let chosen = chosen.or(returned).unwrap_or(STRATEGIES.len() - 1);
-        tracing::info!("keys at the login window use strategy {chosen} ({})", STRATEGIES[chosen].name);
-        chosen
-    }
-
     fn start(&mut self) -> bool {
-        let strategy = match self.strategy {
-            Some(s) => s,
-            None => {
-                let s = self.choose();
-                self.strategy = Some(s);
-                s
-            }
-        };
+        // IOKit's HID system first (see platform::hid).
+        let strategy = *self.strategy.get_or_insert(HID_STRATEGY);
         let Some((mut child, rx)) = spawn_injector(&["--strategy".into(), strategy.to_string()]) else {
             tracing::warn!("couldn't start the key process");
             return false;
@@ -340,9 +316,9 @@ impl ChildInjector {
                 return true;
             }
             self.stop();
-            let next = (self.strategy.unwrap_or(0) + 1) % STRATEGIES.len();
+            let next = (self.strategy.unwrap_or(0) + 1) % (STRATEGIES.len() + 1);
             self.strategy = Some(next);
-            tracing::warn!("a key didn't go through; the key process starts again with strategy {next} ({})", STRATEGIES[next].name);
+            tracing::warn!("a key didn't go through; the key process starts again with {}", strategy_name(next));
         }
         false
     }
@@ -384,10 +360,25 @@ impl Injector for ChildInjector {
     }
 }
 
+/// After [`STRATEGIES`]: keys through IOKit's HID system.
+pub const HID_STRATEGY: usize = STRATEGIES.len();
+
+fn strategy_name(index: usize) -> &'static str {
+    STRATEGIES.get(index).map_or("IOKit's HID system", |s| s.name)
+}
+
 /// The key process: commands on standard input, a line back for each.
 pub fn run_injector(strategy: usize) {
-    let strategy = STRATEGIES.get(strategy).unwrap_or(&STRATEGIES[0]);
-    let mut injector = MacInjector::with_strategy(SessionKind::LoginWindow, strategy);
+    let mut injector: Box<dyn Injector> = match STRATEGIES.get(strategy) {
+        Some(s) => Box::new(MacInjector::with_strategy(SessionKind::LoginWindow, s)),
+        None => match super::hid::HidInjector::open() {
+            Ok(h) => Box::new(h),
+            Err(e) => {
+                eprintln!("IOKit's HID system isn't available ({e}); Quartz events without a source instead");
+                Box::new(MacInjector::with_strategy(SessionKind::LoginWindow, &STRATEGIES[STRATEGIES.len() - 1]))
+            }
+        },
+    };
     let mut out = std::io::stdout();
     for line in BufReader::new(std::io::stdin()).lines() {
         let Ok(line) = line else { break };

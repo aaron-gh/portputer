@@ -144,6 +144,8 @@ fn main() {
             }
         }
         #[cfg(target_os = "macos")]
+        Some("hid-probe") => println!("{}", portputer_core::platform::macos::probe_hid()),
+        #[cfg(target_os = "macos")]
         Some("posting-probe") => println!("{}", portputer_core::platform::macos::posting_probe()),
         #[cfg(target_os = "macos")]
         Some("restore-outputs") => println!("{}", if portputer_core::audio::loopback::recover() { "Outputs put back." } else { "Nothing to put back." }),
