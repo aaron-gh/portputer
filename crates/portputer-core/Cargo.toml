@@ -1,0 +1,43 @@
+[package]
+name = "portputer-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Portputer's core: protocol, encryption, discovery, server, client, audio and keys."
+
+[dependencies]
+chacha20poly1305 = "0.11.0"
+getrandom = "0.4.3"
+hex = "0.4.3"
+hmac = "0.13.0"
+if-addrs = "0.15.0"
+mac_address = "1.2.1"
+mdns-sd = "0.21.6"
+rand_core = "0.10.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+snow = { version = "0.10.0", default-features = false, features = ["default-resolver", "use-chacha20poly1305", "use-blake2", "use-curve25519", "use-getrandom"] }
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros"] }
+tracing = "0.1.44"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSEvent", "NSGraphicsContext", "objc2-core-graphics"] }
+objc2-core-foundation = "0.3.2"
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGEvent", "CGEventSource", "CGEventTypes", "CGRemoteOperation", "objc2"] }
+objc2-foundation = "0.3.2"
+
+[target."cfg(unix)".dependencies]
+libc = "0.2.191"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+cpal = "0.18"
+
+[target.'cfg(target_os = "android")'.dependencies]
+ndk = { version = "0.9", default-features = false, features = ["audio", "api-level-26"] }
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Shutdown", "Win32_System_Power"] }

@@ -1,0 +1,13 @@
+/target
+.DS_Store
+/macos/.build
+/macos/build
+/macos/Sources/Portputer/Generated
+/macos/Sources/portputer_ffiFFI/include
+/android/.gradle
+/android/build
+/android/app/build
+/android/app/src/main/jniLibs
+/android/app/src/main/java/uniffi
+/android/local.properties
+/windows/build
