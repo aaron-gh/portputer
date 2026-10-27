@@ -214,8 +214,9 @@ struct ClientView: View {
 
 extension ServerInfo {
     var sessionDescription: String {
-        if session == .loginWindow { return "Connected to \(name) at the login window." }
-        return user.isEmpty ? "Connected to \(name)." : "Connected to \(name), \(user) logged in."
+        let via = viaRelay ? " through the internet relay" : ""
+        if session == .loginWindow { return "Connected to \(name) at the login window\(via)." }
+        return user.isEmpty ? "Connected to \(name)\(via)." : "Connected to \(name), \(user) logged in\(via)."
     }
 }
 

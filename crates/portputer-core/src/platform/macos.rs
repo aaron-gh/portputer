@@ -319,6 +319,9 @@ pub struct HelperRequest {
     /// login window: the contents of identity.json and paired.json.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync: Option<(String, String)>,
+    /// With `sync`: the relay settings (relay.json), or none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

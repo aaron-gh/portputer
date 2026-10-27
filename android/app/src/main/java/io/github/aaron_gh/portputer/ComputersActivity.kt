@@ -40,7 +40,8 @@ data class ComputerRow(val id: String, val known: KnownServer?, val ads: List<Ad
         (userAd ?: loginAd)?.let { ad ->
             ad.addresses.firstOrNull()?.let { return Target(it, ad.port.toInt(), id, name) }
         }
-        return known?.takeIf { it.host.isNotEmpty() }?.let { Target(it.host, it.port.toInt(), id, name) }
+        // The last address, then the relay, which the core tries after it.
+        return known?.takeIf { it.host.isNotEmpty() || it.hasRelay }?.let { Target(it.host, it.port.toInt(), id, name) }
     }
 }
 
@@ -140,6 +141,7 @@ class ComputersActivity : Activity(), Connection.Listener {
             row.userAd != null -> row.userAd!!.user.takeIf { it.isNotEmpty() }?.let { getString(R.string.status_available_user, it) }
                 ?: getString(R.string.status_available)
             row.loginAd != null -> getString(R.string.status_login_window)
+            row.known?.hasRelay == true -> getString(R.string.status_relay)
             else -> getString(R.string.status_offline)
         }
         val parts = mutableListOf(os, state)

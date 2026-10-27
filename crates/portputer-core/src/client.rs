@@ -57,6 +57,8 @@ pub struct ServerInfo {
     pub mic: bool,
     /// Clipboard and file transfer are available.
     pub files: bool,
+    /// Connected through the internet relay; `host` and `port` are empty.
+    pub via_relay: bool,
     pub host: String,
     pub port: u16,
     /// Paired both ways: keys and commands are allowed.
@@ -137,7 +139,8 @@ struct Conn {
     hash: Vec<u8>,
     public_key: [u8; 32],
     info: ServerInfo,
-    peer_ip: IpAddr,
+    /// None through the relay.
+    peer_ip: Option<IpAddr>,
 }
 
 /// Servers seen on the network, by ID, for reconnecting at new addresses.
@@ -162,15 +165,45 @@ fn seen() -> &'static Mutex<HashMap<String, Vec<ServerAd>>> {
     map
 }
 
-async fn connect_once(host: &str, port: u16, expected: Option<&str>, identity: &Identity, name: &str, store: &ClientStore, transfer: bool) -> Result<Conn, Error> {
-    let addr = tokio::net::lookup_host((host, port))
-        .await?
-        .next()
-        .ok_or_else(|| Error::Protocol(format!("no address for {host}")))?;
-    let stream = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr))
-        .await
-        .map_err(|_| Error::Protocol(format!("{host} didn't answer")))??;
-    let hello = serde_json::to_vec(&ClientMessage::Hello { name: name.to_string(), protocol: PROTOCOL_VERSION, transfer })?;
+/// Where a server is reached: on the network, or through the internet relay.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Endpoint {
+    Tcp(String, u16),
+    Relay(crate::relay::RelayConfig),
+}
+
+async fn connect_once(
+    endpoint: &Endpoint,
+    expected: Option<&str>,
+    identity: &Identity,
+    name: &str,
+    store: &ClientStore,
+    transfer: bool,
+    datagram: Option<&str>,
+) -> Result<Conn, Error> {
+    let (stream, peer_ip, host, port): (transport::BoxStream, Option<IpAddr>, String, u16) = match endpoint {
+        Endpoint::Tcp(host, port) => {
+            let addr = tokio::net::lookup_host((host.as_str(), *port))
+                .await?
+                .next()
+                .ok_or_else(|| Error::Protocol(format!("no address for {host}")))?;
+            let stream = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr))
+                .await
+                .map_err(|_| Error::Protocol(format!("{host} didn't answer")))??;
+            stream.set_nodelay(true)?;
+            (Box::new(stream), Some(addr.ip()), host.clone(), *port)
+        }
+        Endpoint::Relay(relay) => {
+            let id = expected.ok_or_else(|| Error::Protocol("the relay needs the computer's ID".into()))?;
+            (crate::relay::connect(relay, id).await?, None, String::new(), 0)
+        }
+    };
+    let hello = serde_json::to_vec(&ClientMessage::Hello {
+        name: name.to_string(),
+        protocol: PROTOCOL_VERSION,
+        transfer,
+        datagram: datagram.map(String::from),
+    })?;
     let hs = tokio::time::timeout(Duration::from_secs(10), transport::initiate(stream, &identity.private, &hello))
         .await
         .map_err(|_| Error::Protocol("the handshake timed out".into()))??;
@@ -199,8 +232,8 @@ async fn connect_once(host: &str, port: u16, expected: Option<&str>, identity: &
         writer: hs.writer,
         hash: hs.hash,
         public_key: hs.remote_static,
-        info: ServerInfo { id, name: server_name, os, session, user, version, power, audio, mute, mic, files, host: host.to_string(), port, trusted: pinned && paired },
-        peer_ip: addr.ip(),
+        info: ServerInfo { id, name: server_name, os, session, user, version, power, audio, mute, mic, files, host, port, via_relay: peer_ip.is_none(), trusted: pinned && paired },
+        peer_ip,
     })
 }
 
@@ -211,7 +244,26 @@ impl Session {
         let store = ClientStore::new(&config.store_dir);
         let identity = store.identity()?;
         let _ = seen();
-        let conn = runtime().block_on(connect_once(host, port, expected_id.as_deref(), &identity, &config.name, &store, false))?;
+        // The network first, then the relay the computer told us of.
+        let relay = expected_id.as_deref().and_then(|id| store.server(id)).and_then(|s| s.relay);
+        let direct = if host.is_empty() {
+            Err(Error::Protocol("no address".into()))
+        } else {
+            runtime().block_on(connect_once(&Endpoint::Tcp(host.to_string(), port), expected_id.as_deref(), &identity, &config.name, &store, false, None))
+        };
+        let conn = match (direct, relay) {
+            (Ok(conn), _) => conn,
+            (Err(e), Some(relay)) => runtime()
+                .block_on(connect_once(&Endpoint::Relay(relay), expected_id.as_deref(), &identity, &config.name, &store, false, None))
+                .map_err(|relay_error| {
+                    if host.is_empty() {
+                        relay_error
+                    } else {
+                        Error::Refused(format!("Not on the network ({e}), and not through the relay: {relay_error}"))
+                    }
+                })?,
+            (Err(e), None) => return Err(e),
+        };
         let (tx, rx) = mpsc::unbounded_channel();
         let inner = Arc::new(Inner {
             tx,
@@ -222,7 +274,7 @@ impl Session {
             name: config.name.clone(),
             store_dir: config.store_dir.clone(),
         });
-        if conn.info.trusted {
+        if conn.info.trusted && !conn.info.via_relay {
             let _ = store.update(&conn.info.id, |s| {
                 s.last_connected = now_secs();
                 s.host = host.to_string();
@@ -391,11 +443,16 @@ impl Session {
 struct AudioReceiver {
     stop: Arc<AtomicBool>,
     _playback: Playback,
+    /// The relay's datagram connection, when there is one.
+    task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Drop for AudioReceiver {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        if let Some(t) = self.task.take() {
+            t.abort();
+        }
     }
 }
 
@@ -456,9 +513,10 @@ impl Supervisor {
     }
 
     /// Candidates to try: the server's current announcements (the user
-    /// session first), then where it was.
-    fn candidates(info: &ServerInfo) -> Vec<(String, u16)> {
-        let mut out = vec![];
+    /// session first), then where it was, then the relay.
+    fn candidates(&self, info: &ServerInfo) -> Vec<Endpoint> {
+        let known = self.store.server(&info.id);
+        let mut out: Vec<(String, u16)> = vec![];
         if let Some(ads) = seen().lock().unwrap().get(&info.id) {
             let mut ads = ads.clone();
             ads.sort_by_key(|a| a.session != SessionKind::User);
@@ -468,17 +526,28 @@ impl Supervisor {
                 }
             }
         }
-        out.push((info.host.clone(), info.port));
-        let other = if info.port == crate::protocol::LOGIN_WINDOW_PORT { crate::protocol::DEFAULT_PORT } else { crate::protocol::LOGIN_WINDOW_PORT };
-        out.push((info.host.clone(), other));
+        let (host, port) = if info.via_relay {
+            known.as_ref().map(|k| (k.host.clone(), k.port)).unwrap_or_default()
+        } else {
+            (info.host.clone(), info.port)
+        };
+        if !host.is_empty() {
+            out.push((host.clone(), port));
+            let other = if port == crate::protocol::LOGIN_WINDOW_PORT { crate::protocol::DEFAULT_PORT } else { crate::protocol::LOGIN_WINDOW_PORT };
+            out.push((host, other));
+        }
         out.dedup();
-        out
+        let mut endpoints: Vec<Endpoint> = out.into_iter().map(|(h, p)| Endpoint::Tcp(h, p)).collect();
+        if let Some(relay) = known.and_then(|k| k.relay) {
+            endpoints.push(Endpoint::Relay(relay));
+        }
+        endpoints
     }
 
     async fn reconnect(&mut self, info: &ServerInfo, rx: &mut mpsc::UnboundedReceiver<Command>) -> Option<Conn> {
         let started = Instant::now();
         while started.elapsed() < RECONNECT_FOR {
-            for (host, port) in Self::candidates(info) {
+            for endpoint in self.candidates(info) {
                 // Anything asked for meanwhile is dropped: keys typed into a
                 // computer that isn't there shouldn't arrive later.
                 while let Ok(command) = rx.try_recv() {
@@ -493,14 +562,16 @@ impl Supervisor {
                         Command::Send(_) => {}
                     }
                 }
-                let attempt = connect_once(&host, port, Some(&info.id), &self.identity, &self.name, &self.store, false);
-                if let Ok(Ok(conn)) = tokio::time::timeout(Duration::from_secs(8), attempt).await {
+                let attempt = connect_once(&endpoint, Some(&info.id), &self.identity, &self.name, &self.store, false, None);
+                if let Ok(Ok(conn)) = tokio::time::timeout(Duration::from_secs(12), attempt).await {
                     if conn.info.trusted {
-                        let _ = self.store.update(&conn.info.id, |s| {
-                            s.last_connected = now_secs();
-                            s.host = host.clone();
-                            s.port = port;
-                        });
+                        if let Endpoint::Tcp(host, port) = &endpoint {
+                            let _ = self.store.update(&conn.info.id, |s| {
+                                s.last_connected = now_secs();
+                                s.host = host.clone();
+                                s.port = *port;
+                            });
+                        }
                         return Some(conn);
                     }
                 }
@@ -610,6 +681,7 @@ impl Supervisor {
                                 port: info.port,
                                 macs: seen().lock().unwrap().get(&info.id).and_then(|a| a.first().map(|a| a.macs.clone())).unwrap_or_default(),
                                 last_connected: now_secs(),
+                                relay: None,
                             };
                             if let Err(e) = self.store.upsert(known) {
                                 let _ = reply.send(Err(e.to_string()));
@@ -639,7 +711,11 @@ impl Supervisor {
                         ServerMessage::Notice { code, message } => self.emit(SessionEvent::Notice { code, message }),
                         ServerMessage::AudioReady { port, key, sample_rate, channels, frames } => {
                             audio = None;
-                            match self.start_audio(peer_ip, port, &key, sample_rate, channels, frames) {
+                            let started = match peer_ip {
+                                Some(ip) => self.start_audio(ip, port, &key, sample_rate, channels, frames),
+                                None => self.start_audio_relayed(&info, &key, sample_rate, channels, frames),
+                            };
+                            match started {
                                 Ok(a) => {
                                     audio = Some(a);
                                     self.emit(SessionEvent::AudioStarted { sample_rate });
@@ -653,7 +729,11 @@ impl Supervisor {
                         }
                         ServerMessage::MicReady { port, key } => {
                             mic = None;
-                            match start_mic_sender(peer_ip, port, &key) {
+                            let started = match peer_ip {
+                                Some(ip) => start_mic_sender(ip, port, &key),
+                                None => self.start_mic_relayed(&info, &key),
+                            };
+                            match started {
                                 Ok(m) => {
                                     mic = Some(m);
                                     self.emit(SessionEvent::MicStarted);
@@ -663,6 +743,12 @@ impl Supervisor {
                                     self.mic_wanted = false;
                                     self.emit(SessionEvent::Error { code: errors::MIC_FAILED.into(), message: e.to_string() });
                                 }
+                            }
+                        }
+                        ServerMessage::Relay { url, token } => {
+                            if info.trusted {
+                                let relay = crate::relay::RelayConfig { url, token };
+                                let _ = self.store.update(&info.id, |s| s.relay = Some(relay));
                             }
                         }
                         ServerMessage::ClipboardText { text } => {
@@ -772,7 +858,76 @@ impl Supervisor {
 
         let playback = audio::start_playback(jitter.clone())?;
         *self.inner.jitter.lock().unwrap() = Some(jitter);
-        Ok(AudioReceiver { stop, _playback: playback })
+        Ok(AudioReceiver { stop, _playback: playback, task: None })
+    }
+
+    /// The relay this server is reached through.
+    fn relay_endpoint(&self, info: &ServerInfo) -> Result<Endpoint, Error> {
+        self.store
+            .server(&info.id)
+            .and_then(|s| s.relay)
+            .map(Endpoint::Relay)
+            .ok_or_else(|| Error::Protocol("no relay for this computer".into()))
+    }
+
+    /// Audio through the relay: packets in data frames on a datagram
+    /// connection of their own, in place of UDP.
+    fn start_audio_relayed(&self, info: &ServerInfo, key: &str, rate: u32, channels: u16, frames: u32) -> Result<AudioReceiver, Error> {
+        let key = PacketKey::new(&hex::decode(key).ok().and_then(|k| k.try_into().ok()).ok_or_else(|| Error::Protocol("bad audio key".into()))?);
+        let (volume, latency) = {
+            let s = self.inner.settings.lock().unwrap();
+            (s.volume, s.latency_ms)
+        };
+        // More held back: the relay is TCP all the way.
+        let mut buffer = JitterBuffer::new(rate, channels, frames, latency.max(100));
+        buffer.gain = volume;
+        let jitter = Arc::new(Mutex::new(buffer));
+        let endpoint = self.relay_endpoint(info)?;
+        let (id, identity, name, store_dir) = (info.id.clone(), self.identity.clone(), self.name.clone(), self.inner.store_dir.clone());
+        let push = jitter.clone();
+        let task = runtime().spawn(async move {
+            let store = ClientStore::new(&store_dir);
+            let Ok(mut conn) = connect_once(&endpoint, Some(&id), &identity, &name, &store, false, Some("audio")).await else { return };
+            while let Ok(frame) = conn.reader.recv_frame::<ServerMessage>().await {
+                if let transport::Frame::Data(packet) = frame {
+                    if let Some((udp::KIND_AUDIO, seq, payload)) = key.open(&packet) {
+                        push.lock().unwrap().push(seq, udp::decode_pcm(&payload));
+                    }
+                }
+            }
+        });
+        let playback = audio::start_playback(jitter.clone())?;
+        *self.inner.jitter.lock().unwrap() = Some(jitter);
+        Ok(AudioReceiver { stop: Default::default(), _playback: playback, task: Some(task) })
+    }
+
+    /// The microphone through the relay, on a datagram connection.
+    fn start_mic_relayed(&self, info: &ServerInfo, key: &str) -> Result<MicSender, Error> {
+        let key = PacketKey::new(&hex::decode(key).ok().and_then(|k| k.try_into().ok()).ok_or_else(|| Error::Protocol("bad microphone key".into()))?);
+        let endpoint = self.relay_endpoint(info)?;
+        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (id, identity, name, store_dir) = (info.id.clone(), self.identity.clone(), self.name.clone(), self.inner.store_dir.clone());
+        let task = runtime().spawn(async move {
+            let store = ClientStore::new(&store_dir);
+            let Ok(conn) = connect_once(&endpoint, Some(&id), &identity, &name, &store, false, Some("mic")).await else { return };
+            while let Some(packet) = rx.recv().await {
+                if conn.writer.send_data(&packet).await.is_err() {
+                    return;
+                }
+            }
+        });
+        let mut resample = audio::ToMono48k::default();
+        let mut pending: Vec<f32> = Vec::new();
+        let mut seq = 0u32;
+        let capture = audio::start_input(move |samples, channels, rate| {
+            resample.push(samples, channels, rate, &mut pending);
+            while pending.len() >= udp::MIC_FRAMES {
+                let frame: Vec<i16> = pending.drain(..udp::MIC_FRAMES).map(|s| (s.clamp(-1.0, 1.0) * 32767.0) as i16).collect();
+                let _ = tx.send(key.seal(udp::KIND_MIC, seq, &udp::encode_pcm(&frame)));
+                seq = seq.wrapping_add(1);
+            }
+        })?;
+        Ok(MicSender { _capture: capture, task: Some(task) })
     }
 }
 
@@ -788,6 +943,15 @@ pub fn forget_server(store_dir: &std::path::Path, id: &str) -> Result<(), Error>
 /// This device's microphone, sent to the computer as it's recorded.
 struct MicSender {
     _capture: audio::Capture,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for MicSender {
+    fn drop(&mut self) {
+        if let Some(t) = self.task.take() {
+            t.abort();
+        }
+    }
 }
 
 fn start_mic_sender(server: IpAddr, port: u16, key: &str) -> Result<MicSender, Error> {
@@ -811,7 +975,7 @@ fn start_mic_sender(server: IpAddr, port: u16, key: &str) -> Result<MicSender, E
             seq = seq.wrapping_add(1);
         }
     })?;
-    Ok(MicSender { _capture: capture })
+    Ok(MicSender { _capture: capture, task: None })
 }
 
 /// Opens a transfer connection to the connected server and runs `op` on it.
@@ -825,7 +989,12 @@ where
         return Err(Error::Refused("Not paired.".into()));
     }
     let store = ClientStore::new(&inner.store_dir);
-    let conn = connect_once(&info.host, info.port, Some(&info.id), &inner.identity, &inner.name, &store, true).await?;
+    let endpoint = if info.via_relay {
+        Endpoint::Relay(store.server(&info.id).and_then(|s| s.relay).ok_or_else(|| Error::Protocol("no relay for this computer".into()))?)
+    } else {
+        Endpoint::Tcp(info.host.clone(), info.port)
+    };
+    let conn = connect_once(&endpoint, Some(&info.id), &inner.identity, &inner.name, &store, true, None).await?;
     if !conn.info.trusted {
         return Err(Error::Refused("Not paired.".into()));
     }

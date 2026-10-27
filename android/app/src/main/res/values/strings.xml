@@ -21,6 +21,7 @@
     <string name="status_available_user">%1$s logged in</string>
     <string name="status_login_window">at the login window</string>
     <string name="status_offline">not on the network</string>
+    <string name="status_relay">through the internet relay</string>
     <string name="status_not_paired">not paired</string>
     <string name="status_connected">connected</string>
     <string name="os_mac">Mac</string>
@@ -43,6 +44,7 @@
     <string name="connected_user">Connected to %1$s, %2$s logged in.</string>
     <string name="connected_nobody">Connected to %1$s.</string>
     <string name="connected_login_window">Connected to %1$s at the login window.</string>
+    <string name="connected_via_relay">Through the internet relay.</string>
     <string name="reconnecting">Connection to %1$s lost. Reconnecting.</string>
     <string name="closed">Disconnected from %1$s. %2$s</string>
     <string name="connect_failed">Couldn\'t connect to %1$s. %2$s</string>

@@ -250,13 +250,24 @@ pub struct KnownServer {
     pub port: u16,
     pub macs: Vec<String>,
     pub last_connected: u64,
+    /// Reachable through the internet relay when not on the network.
+    pub has_relay: bool,
 }
 
 #[uniffi::export]
 pub fn known_servers(store_dir: String) -> Vec<KnownServer> {
     client::known_servers(&PathBuf::from(store_dir))
         .into_iter()
-        .map(|s| KnownServer { id: s.id, name: s.name, os: s.os, host: s.host, port: s.port, macs: s.macs, last_connected: s.last_connected })
+        .map(|s| KnownServer {
+            id: s.id,
+            name: s.name,
+            os: s.os,
+            host: s.host,
+            port: s.port,
+            macs: s.macs,
+            last_connected: s.last_connected,
+            has_relay: s.relay.is_some(),
+        })
         .collect()
 }
 
@@ -289,6 +300,8 @@ pub struct ServerInfo {
     pub mic: bool,
     /// Clipboard and file transfer are available.
     pub files: bool,
+    /// Connected through the internet relay.
+    pub via_relay: bool,
     pub host: String,
     pub port: u16,
     /// Paired both ways. Until it is, only `pair` does anything.
@@ -309,6 +322,7 @@ impl From<client::ServerInfo> for ServerInfo {
             mute: i.mute,
             mic: i.mic,
             files: i.files,
+            via_relay: i.via_relay,
             host: i.host,
             port: i.port,
             trusted: i.trusted,
@@ -561,6 +575,7 @@ pub enum ServerNotice {
     PairingFailed { name: String },
     InputNotAllowed,
     AudioFailed { message: String },
+    Relay { listening: bool, message: String },
     Error { message: String },
 }
 
@@ -574,6 +589,7 @@ impl From<ServerEvent> for ServerNotice {
             ServerEvent::PairingFailed { name } => ServerNotice::PairingFailed { name },
             ServerEvent::InputNotAllowed => ServerNotice::InputNotAllowed,
             ServerEvent::AudioFailed { message } => ServerNotice::AudioFailed { message },
+            ServerEvent::Relay { listening, message } => ServerNotice::Relay { listening, message },
             ServerEvent::Error { message } => ServerNotice::Error { message },
         }
     }
@@ -672,6 +688,25 @@ impl ServerHandle {
         Ok(portputer_core::identity::ServerStore::new(&self.store_dir).remove_paired(&id)?)
     }
 
+    /// Sets the internet relay (the Worker's address and token); an empty
+    /// address turns it off.
+    pub fn set_relay(&self, url: String, token: String) -> Result<(), PortputerError> {
+        let relay = portputer_core::relay::RelayConfig { url, token };
+        let relay = relay.is_set().then_some(relay);
+        match self.server.lock().unwrap().as_ref() {
+            Some(s) => Ok(s.set_relay(relay)?),
+            None => Ok(portputer_core::identity::ServerStore::new(&self.store_dir).set_relay(relay.as_ref())?),
+        }
+    }
+
+    /// The relay's address and token, empty when there's none.
+    pub fn relay(&self) -> Vec<String> {
+        portputer_core::identity::ServerStore::new(&self.store_dir)
+            .relay()
+            .map(|r| vec![r.url, r.token])
+            .unwrap_or_default()
+    }
+
     pub fn connected(&self) -> Vec<ConnectedDevice> {
         self.with(|s| s.connected())
             .unwrap_or_default()
@@ -727,7 +762,8 @@ pub fn sync_login_window(store_dir: String) -> Result<(), PortputerError> {
         let store = portputer_core::identity::ServerStore::new(&dir);
         store.identity()?;
         let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap_or_else(|_| "[]".into());
-        let request = HelperRequest { sync: Some((read("identity.json"), read("paired.json"))), ..Default::default() };
+        let relay = std::fs::read_to_string(dir.join("relay.json")).ok();
+        let request = HelperRequest { sync: Some((read("identity.json"), read("paired.json"))), relay, ..Default::default() };
         helper(&request).map_err(|message| PortputerError::Failed { message })
     }
     #[cfg(not(target_os = "macos"))]

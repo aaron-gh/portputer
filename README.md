@@ -25,6 +25,7 @@ Not yet run: the Mac app's client window, Mute Computer Speakers, the login wind
 | `crates/portputer-windows` | Windows app |
 | `macos/` | Mac app |
 | `android/` | Android app |
+| `relay/` | Internet relay: a Cloudflare Worker |
 | `docs/PROTOCOL.md` | Wire protocol |
 
 ## Android app
@@ -86,6 +87,10 @@ Build on the Mac: `windows/build.sh`, which needs MinGW-w64 (`brew install mingw
 Not yet on Windows: the microphone driver (Windows only loads kernel audio drivers signed by Microsoft), control before login (a service running on the secure desktop), Control-Alt-Delete, and Restart Without Disk Unlock (BitLocker).
 
 Clipboard and files are off at the Mac login window, where the server runs as root. Not yet in the Mac and Windows clients: browsing and downloading the other computer's files (the Android app has it).
+
+## Internet relay
+
+When a paired computer isn't on the device's network, Portputer connects through an internet relay: a Cloudflare Worker you deploy to your own Cloudflare account (`relay/`, with instructions there). Set its address and token on the computer (Mac: Settings, Internet Relay; Windows: the relay fields); paired devices learn them from the computer. The computer list shows such computers as "through the internet relay". Everything works through it: keys, audio (over WebSockets, with at least 100 ms of buffer), the microphone, the clipboard and files. Portputer's own encryption runs end to end inside.
 
 ## Security
 

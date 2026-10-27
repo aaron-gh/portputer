@@ -175,3 +175,74 @@ fn transfers_files() {
         let _ = std::fs::remove_dir_all(d);
     }
 }
+
+/// Through a running relay (PORTPUTER_RELAY_TEST_URL, such as
+/// http://127.0.0.1:8787 from `wrangler dev`, with PORTPUTER_RELAY_TEST_TOKEN):
+/// pair on the network, learn the relay, then connect, list files and stream
+/// audio through it alone.
+#[test]
+fn through_relay() {
+    let Ok(url) = std::env::var("PORTPUTER_RELAY_TEST_URL") else {
+        eprintln!("PORTPUTER_RELAY_TEST_URL not set: skipped");
+        return;
+    };
+    let token = std::env::var("PORTPUTER_RELAY_TEST_TOKEN").unwrap_or_default();
+    unsafe {
+        std::env::set_var("PORTPUTER_NO_PROMPT", "1");
+        std::env::set_var("PORTPUTER_TEST_TONE", "1");
+    }
+    let server_dir = temp("relay-server");
+    let client_dir = temp("relay-client");
+    let listening = Arc::new(Mutex::new(false));
+    struct Watch(Arc<Mutex<bool>>);
+    impl portputer_core::server::ServerObserver for Watch {
+        fn event(&self, event: portputer_core::server::ServerEvent) {
+            if let portputer_core::server::ServerEvent::Relay { listening, .. } = event {
+                *self.0.lock().unwrap() = listening;
+            }
+        }
+    }
+    let server = Server::start(ServerConfig {
+        store_dir: server_dir.clone(),
+        session: SessionKind::User,
+        port: 0,
+        name: "Relay Computer".into(),
+        observer: Some(Arc::new(Watch(listening.clone()))),
+    })
+    .unwrap();
+    server.set_relay(Some(portputer_core::relay::RelayConfig { url, token })).unwrap();
+    for _ in 0..50 {
+        if *listening.lock().unwrap() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(*listening.lock().unwrap(), "listening at the relay");
+
+    let events = Arc::new(Events::default());
+    let config = || ClientConfig { store_dir: client_dir.clone(), name: "Test Phone".into(), observer: events.clone(), local_clipboard: false };
+    let local = Session::connect("127.0.0.1", server.port(), None, config()).unwrap();
+    local.pair(&server.new_pairing_code()).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let known = portputer_core::client::known_servers(&client_dir);
+    assert!(known[0].relay.is_some(), "the computer told the client its relay");
+    local.close();
+    std::thread::sleep(Duration::from_millis(200));
+
+    // No usable address: only the relay.
+    let relayed = Session::connect("127.0.0.1", 1, Some(server.id()), config()).unwrap();
+    let info = relayed.info().unwrap();
+    assert!(info.via_relay && info.trusted, "{info:?}");
+    let listing = relayed.list_files(server_dir.to_str().unwrap()).unwrap();
+    assert!(matches!(listing, portputer_core::files::TransferReply::Listing { .. }));
+
+    relayed.set_volume(0.0);
+    relayed.start_audio();
+    std::thread::sleep(Duration::from_millis(2500));
+    let stats = relayed.audio_stats().expect("audio through the relay");
+    assert!(stats.received > 100, "{stats:?}");
+    relayed.close();
+    for d in [server_dir, client_dir] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}

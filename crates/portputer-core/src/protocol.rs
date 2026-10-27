@@ -46,6 +46,10 @@ pub enum ClientMessage {
         protocol: u32,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         transfer: bool,
+        /// Over the relay, a connection for audio ("audio") or the
+        /// microphone ("mic") packets, in data frames, in place of UDP.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        datagram: Option<String>,
     },
     /// Proof of the pairing code: HMAC-SHA256 over "client" and the
     /// handshake hash, keyed with the normalised code, in hex.
@@ -131,6 +135,9 @@ pub enum ServerMessage {
     /// Where to send microphone packets (kind 3, 48 kHz mono, 5 ms), and their key.
     MicReady { port: u16, key: String },
     MicStopped { reason: String },
+    /// The internet relay the server listens at, for paired clients to use
+    /// when it isn't on their network.
+    Relay { url: String, token: String },
     /// Text copied on the server.
     ClipboardText { text: String },
     /// Files copied on the server; fetched over a transfer connection.

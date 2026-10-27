@@ -8,9 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use snow::{Builder, HandshakeState, StatelessTransportState};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 
 use crate::Error;
 
@@ -23,6 +21,12 @@ pub const MAX_PAYLOAD: usize = MAX_MESSAGE - 16;
 pub fn builder() -> Builder<'static> {
     Builder::new(NOISE_PARAMS.parse().expect("valid Noise parameters"))
 }
+
+/// Anything the control protocol can run over: a TCP connection, or a
+/// connection through the internet relay.
+pub trait Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> Stream for T {}
+pub type BoxStream = Box<dyn Stream>;
 
 pub struct Handshaken {
     pub reader: Reader,
@@ -50,14 +54,14 @@ async fn write_frame(stream: &mut (impl AsyncWriteExt + Unpin), bytes: &[u8]) ->
     Ok(())
 }
 
-fn finish(stream: TcpStream, hs: HandshakeState, payload: Vec<u8>) -> Result<Handshaken, Error> {
+fn finish(stream: BoxStream, hs: HandshakeState, payload: Vec<u8>) -> Result<Handshaken, Error> {
     let remote_static: [u8; 32] = hs
         .get_remote_static()
         .and_then(|k| k.try_into().ok())
         .ok_or(Error::Protocol("no static key from the other side".into()))?;
     let hash = hs.get_handshake_hash().to_vec();
     let state = Arc::new(hs.into_stateless_transport_mode()?);
-    let (read, write) = stream.into_split();
+    let (read, write) = tokio::io::split(stream);
     Ok(Handshaken {
         reader: Reader { stream: read, state: state.clone(), nonce: 0 },
         writer: Writer { stream: Arc::new(tokio::sync::Mutex::new(write)), state, nonce: Arc::new(AtomicU64::new(0)) },
@@ -68,8 +72,7 @@ fn finish(stream: TcpStream, hs: HandshakeState, payload: Vec<u8>) -> Result<Han
 }
 
 /// The client's side: -> e; <- e, ee, s, es; -> s, se with `payload`.
-pub async fn initiate(mut stream: TcpStream, private_key: &[u8; 32], payload: &[u8]) -> Result<Handshaken, Error> {
-    stream.set_nodelay(true)?;
+pub async fn initiate(mut stream: BoxStream, private_key: &[u8; 32], payload: &[u8]) -> Result<Handshaken, Error> {
     let mut hs = builder().local_private_key(private_key)?.prologue(PROLOGUE)?.build_initiator()?;
     let mut buf = vec![0u8; MAX_MESSAGE];
     let n = hs.write_message(&[], &mut buf)?;
@@ -83,8 +86,7 @@ pub async fn initiate(mut stream: TcpStream, private_key: &[u8; 32], payload: &[
 }
 
 /// The server's side of [`initiate`].
-pub async fn respond(mut stream: TcpStream, private_key: &[u8; 32]) -> Result<Handshaken, Error> {
-    stream.set_nodelay(true)?;
+pub async fn respond(mut stream: BoxStream, private_key: &[u8; 32]) -> Result<Handshaken, Error> {
     let mut hs = builder().local_private_key(private_key)?.prologue(PROLOGUE)?.build_responder()?;
     let mut buf = vec![0u8; MAX_MESSAGE];
     let msg = read_frame(&mut stream).await?;
@@ -98,7 +100,7 @@ pub async fn respond(mut stream: TcpStream, private_key: &[u8; 32]) -> Result<Ha
 }
 
 pub struct Reader {
-    stream: OwnedReadHalf,
+    stream: ReadHalf<BoxStream>,
     state: Arc<StatelessTransportState>,
     nonce: u64,
 }
@@ -142,7 +144,7 @@ impl Reader {
 /// The sending half. Clones share one nonce counter and one socket.
 #[derive(Clone)]
 pub struct Writer {
-    stream: Arc<tokio::sync::Mutex<OwnedWriteHalf>>,
+    stream: Arc<tokio::sync::Mutex<WriteHalf<BoxStream>>>,
     state: Arc<StatelessTransportState>,
     nonce: Arc<AtomicU64>,
 }

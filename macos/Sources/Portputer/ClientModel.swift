@@ -32,6 +32,8 @@ final class ClientModel: ObservableObject {
                 parts.append(ad.user.isEmpty ? "available" : "\(ad.user) logged in")
             } else if loginAd != nil {
                 parts.append("at the login window")
+            } else if known?.hasRelay == true {
+                parts.append("through the internet relay")
             } else {
                 parts.append("not on the network")
             }
@@ -120,7 +122,8 @@ final class ClientModel: ObservableObject {
         let ad = computer.userAd ?? computer.loginAd
         if let ad, let host = ad.addresses.first {
             connect(host: host, port: ad.port, id: computer.id, name: computer.name)
-        } else if let k = computer.known, !k.host.isEmpty {
+        } else if let k = computer.known, !k.host.isEmpty || k.hasRelay {
+            // The last address, then the relay.
             connect(host: k.host, port: k.port, id: computer.id, name: computer.name)
         } else {
             message = "\(computer.name) is not on the network."

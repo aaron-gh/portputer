@@ -28,6 +28,8 @@ pub enum ServerEvent {
     /// Key events can't be posted: the system hasn't given permission.
     InputNotAllowed,
     AudioFailed { message: String },
+    /// Whether the server is listening at the internet relay.
+    Relay { listening: bool, message: String },
     Error { message: String },
 }
 
@@ -64,6 +66,10 @@ struct Shared {
     observer: Option<Arc<dyn ServerObserver>>,
     next_conn: AtomicU64,
     clipboard_batch: crate::files::ClipboardBatch,
+    /// Relayed clients' microphones, by client ID, as their packets arrive
+    /// on datagram connections.
+    mic_inputs: Arc<MicInputs>,
+    relay_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// The clipboard's change count after Portputer last wrote it, so that
     /// isn't sent back.
     own_clipboard: std::sync::atomic::AtomicI64,
@@ -123,6 +129,8 @@ impl Server {
             observer: config.observer,
             next_conn: AtomicU64::new(1),
             clipboard_batch: Default::default(),
+            mic_inputs: Default::default(),
+            relay_task: Mutex::new(None),
             own_clipboard: std::sync::atomic::AtomicI64::new(-1),
         });
         // PORTPUTER_NO_PROMPT keeps tests from asking for permission.
@@ -136,8 +144,9 @@ impl Server {
                 match listener.accept().await {
                     Ok((stream, address)) => {
                         let shared = accept.clone();
+                        let _ = stream.set_nodelay(true);
                         tokio::spawn(async move {
-                            if let Err(e) = serve(shared, stream, address).await {
+                            if let Err(e) = serve(shared, Box::new(stream), Some(address)).await {
                                 tracing::debug!("client {address}: {e}");
                             }
                         });
@@ -164,7 +173,9 @@ impl Server {
             }
         };
         shared.emit(ServerEvent::Listening { port });
-        Ok(Server { shared, runtime: Some(runtime), port, _announcement: announcement })
+        let server = Server { shared, runtime: Some(runtime), port, _announcement: announcement };
+        server.restart_relay();
+        Ok(server)
     }
 
     pub fn port(&self) -> u16 {
@@ -204,6 +215,51 @@ impl Server {
         self.shared.clients.lock().unwrap().values().cloned().collect()
     }
 
+    /// Sets the internet relay to listen at, saved with the server's
+    /// identity, or none.
+    pub fn set_relay(&self, relay: Option<crate::relay::RelayConfig>) -> Result<(), Error> {
+        self.shared.store.set_relay(relay.as_ref())?;
+        self.restart_relay();
+        Ok(())
+    }
+
+    pub fn relay(&self) -> Option<crate::relay::RelayConfig> {
+        self.shared.store.relay()
+    }
+
+    fn restart_relay(&self) {
+        let Some(runtime) = &self.runtime else { return };
+        if let Some(task) = self.shared.relay_task.lock().unwrap().take() {
+            task.abort();
+        }
+        let Some(relay) = self.shared.store.relay() else {
+            self.shared.emit(ServerEvent::Relay { listening: false, message: "Not set.".into() });
+            return;
+        };
+        let accept_shared = self.shared.clone();
+        let state_shared = self.shared.clone();
+        let task = runtime.spawn(crate::relay::listen(
+            relay,
+            self.shared.identity.id(),
+            move |stream| {
+                let shared = accept_shared.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = serve(shared, stream, None).await {
+                        tracing::debug!("relayed client: {e}");
+                    }
+                });
+            },
+            move |state| {
+                let (listening, message) = match state {
+                    Ok(()) => (true, "Listening.".to_string()),
+                    Err(e) => (false, e),
+                };
+                state_shared.emit(ServerEvent::Relay { listening, message });
+            },
+        ));
+        *self.shared.relay_task.lock().unwrap() = Some(task);
+    }
+
     pub fn input_allowed(&self) -> bool {
         platform::input_allowed(false)
     }
@@ -238,14 +294,17 @@ fn input_thread(session: SessionKind, commands: std::sync::mpsc::Receiver<InputC
     injector.release_all();
 }
 
-async fn serve(shared: Arc<Shared>, stream: tokio::net::TcpStream, address: SocketAddr) -> Result<(), Error> {
+/// Serves one connection, over TCP (`address`) or through the relay (none).
+async fn serve(shared: Arc<Shared>, stream: transport::BoxStream, address: Option<SocketAddr>) -> Result<(), Error> {
+    let client_ip = address.map(|a| a.ip());
+    let shown_address = address.map_or_else(|| "internet relay".to_string(), |a| a.ip().to_string());
     let hs = tokio::time::timeout(Duration::from_secs(10), transport::respond(stream, &shared.identity.private))
         .await
         .map_err(|_| Error::Protocol("handshake timed out".into()))??;
     let client_key = hs.remote_static;
     let client_id = id_of(&client_key);
-    let (name, protocol, transfer) = match serde_json::from_slice::<ClientMessage>(&hs.payload) {
-        Ok(ClientMessage::Hello { name, protocol, transfer }) => (name, protocol, transfer),
+    let (name, protocol, transfer, datagram) = match serde_json::from_slice::<ClientMessage>(&hs.payload) {
+        Ok(ClientMessage::Hello { name, protocol, transfer, datagram }) => (name, protocol, transfer, datagram),
         _ => return Err(Error::Protocol("no hello".into())),
     };
     let writer = hs.writer.clone();
@@ -263,9 +322,11 @@ async fn serve(shared: Arc<Shared>, stream: tokio::net::TcpStream, address: Sock
     let conn = shared.next_conn.fetch_add(1, Ordering::Relaxed);
     shared.clients.lock().unwrap().insert(
         conn,
-        ConnectedClient { id: client_id.clone(), name: name.clone(), address: address.ip().to_string(), paired },
+        ConnectedClient { id: client_id.clone(), name: name.clone(), address: shown_address.clone(), paired },
     );
-    shared.emit(ServerEvent::Connected { client_id: client_id.clone(), name: name.clone(), address: address.ip().to_string() });
+    if !transfer && datagram.is_none() {
+        shared.emit(ServerEvent::Connected { client_id: client_id.clone(), name: name.clone(), address: shown_address.clone() });
+    }
 
     writer
         .send(&ServerMessage::Welcome {
@@ -283,6 +344,13 @@ async fn serve(shared: Arc<Shared>, stream: tokio::net::TcpStream, address: Sock
             files: files_available(shared.session),
         })
         .await?;
+    if let Some(purpose) = datagram {
+        shared.clients.lock().unwrap().remove(&conn);
+        if !paired {
+            return Ok(());
+        }
+        return serve_datagrams(shared, reader, writer, &client_id, &purpose).await;
+    }
     if transfer {
         shared.clients.lock().unwrap().remove(&conn);
         if !paired || !files_available(shared.session) {
@@ -290,6 +358,12 @@ async fn serve(shared: Arc<Shared>, stream: tokio::net::TcpStream, address: Sock
             return Ok(());
         }
         return crate::files::serve(reader, writer, &shared.clipboard_batch, &shared.own_clipboard).await;
+    }
+    // Only on control connections: transfer connections answer requests.
+    if paired {
+        if let Some(relay) = shared.store.relay() {
+            writer.send(&ServerMessage::Relay { url: relay.url, token: relay.token }).await?;
+        }
     }
     if paired && !platform::input_allowed(false) {
         writer.send(&input_notice()).await?;
@@ -330,6 +404,9 @@ async fn serve(shared: Arc<Shared>, stream: tokio::net::TcpStream, address: Sock
                             }
                             shared.emit(ServerEvent::Paired { client_id: client_id.clone(), name: name.clone() });
                             writer.send(&ServerMessage::Paired { proof: reply }).await?;
+                            if let Some(relay) = shared.store.relay() {
+                                writer.send(&ServerMessage::Relay { url: relay.url, token: relay.token }).await?;
+                            }
                             if !platform::input_allowed(false) {
                                 writer.send(&input_notice()).await?;
                             }
@@ -371,7 +448,7 @@ async fn serve(shared: Arc<Shared>, stream: tokio::net::TcpStream, address: Sock
                 }
                 ClientMessage::AudioStart { mute } => {
                     audio = None;
-                    match shared.audio.subscribe(address.ip(), mute) {
+                    match shared.audio.subscribe(client_ip, client_id.clone(), mute) {
                         Ok((sub, ready, mute_result)) => {
                             audio = Some(sub);
                             writer.send(&ready).await?;
@@ -396,7 +473,7 @@ async fn serve(shared: Arc<Shared>, stream: tokio::net::TcpStream, address: Sock
                 }
                 ClientMessage::MicStart => {
                     mic = None;
-                    match start_microphone(address.ip()) {
+                    match start_microphone(client_ip, &client_id, &shared.mic_inputs) {
                         Ok((sink, ready)) => {
                             mic = Some(sink);
                             writer.send(&ready).await?;
@@ -532,15 +609,56 @@ fn microphone_available() -> bool {
     false
 }
 
+type MicInputs = Mutex<HashMap<String, (PacketKey, Arc<Mutex<crate::jitter::JitterBuffer>>)>>;
+
 /// A client's microphone, played into the Portputer Microphone driver.
 struct MicSink {
     stop: Arc<std::sync::atomic::AtomicBool>,
     _output: Box<dyn Send>,
+    /// For a relayed client: its entry in the server's microphone inputs.
+    relayed: Option<(Arc<MicInputs>, String)>,
 }
 
 impl Drop for MicSink {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        if let Some((inputs, id)) = self.relayed.take() {
+            inputs.lock().unwrap().remove(&id);
+        }
+    }
+}
+
+/// A datagram connection from a relayed client: audio packets out, or
+/// microphone packets in, as data frames.
+async fn serve_datagrams(shared: Arc<Shared>, mut reader: transport::Reader, writer: transport::Writer, client_id: &str, purpose: &str) -> Result<(), Error> {
+    match purpose {
+        "audio" => {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+            shared.audio.attach_relay(client_id, tx);
+            loop {
+                tokio::select! {
+                    packet = rx.recv() => match packet {
+                        Some(p) => writer.send_data(&p).await?,
+                        None => return Ok(()),
+                    },
+                    frame = reader.recv_frame::<ClientMessage>() => {
+                        if frame.is_err() {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+        "mic" => loop {
+            let transport::Frame::Data(packet) = reader.recv_frame::<ClientMessage>().await? else { continue };
+            let input = shared.mic_inputs.lock().unwrap().get(client_id).cloned();
+            if let Some((key, jitter)) = input {
+                if let Some((udp::KIND_MIC, seq, payload)) = key.open(&packet) {
+                    jitter.lock().unwrap().push(seq, udp::decode_pcm(&payload));
+                }
+            }
+        },
+        _ => Ok(()),
     }
 }
 
@@ -555,9 +673,21 @@ fn microphone_output(jitter: Arc<Mutex<crate::jitter::JitterBuffer>>) -> Result<
     }
 }
 
-fn start_microphone(client_ip: std::net::IpAddr) -> Result<(MicSink, ServerMessage), Error> {
+/// A client's microphone: over UDP from `client_ip`, or for a relayed
+/// client (no address), through its datagram connection.
+fn start_microphone(client_ip: Option<std::net::IpAddr>, client_id: &str, inputs: &Arc<MicInputs>) -> Result<(MicSink, ServerMessage), Error> {
     let jitter = Arc::new(Mutex::new(crate::jitter::JitterBuffer::new(udp::MIC_RATE, 1, udp::MIC_FRAMES as u32, 60)));
     let output = microphone_output(jitter.clone())?;
+    let Some(client_ip) = client_ip else {
+        let (key_bytes, key) = PacketKey::random();
+        inputs.lock().unwrap().insert(client_id.to_string(), (key, jitter));
+        let sink = MicSink {
+            stop: Default::default(),
+            _output: output,
+            relayed: Some((inputs.clone(), client_id.to_string())),
+        };
+        return Ok((sink, ServerMessage::MicReady { port: 0, key: hex::encode(key_bytes) }));
+    };
     let socket = UdpSocket::bind(("0.0.0.0", 0))?;
     socket.set_read_timeout(Some(Duration::from_millis(500)))?;
     let port = socket.local_addr()?.port();
@@ -576,7 +706,7 @@ fn start_microphone(client_ip: std::net::IpAddr) -> Result<(MicSink, ServerMessa
             }
         }
     })?;
-    Ok((MicSink { stop, _output: output }, ServerMessage::MicReady { port, key: hex::encode(key_bytes) }))
+    Ok((MicSink { stop, _output: output, relayed: None }, ServerMessage::MicReady { port, key: hex::encode(key_bytes) }))
 }
 
 /// One client's audio stream: its own UDP socket, key and sequence numbers.
@@ -584,7 +714,10 @@ struct Subscriber {
     id: u64,
     socket: UdpSocket,
     key: PacketKey,
-    client_ip: std::net::IpAddr,
+    /// None for a relayed client, whose packets go on its datagram connection.
+    client_ip: Option<std::net::IpAddr>,
+    client_id: String,
+    relay_tx: Mutex<Option<tokio::sync::mpsc::Sender<Vec<u8>>>>,
     dest: Mutex<Option<(SocketAddr, Instant)>>,
     seq: AtomicU32,
     closed: std::sync::atomic::AtomicBool,
@@ -648,7 +781,7 @@ struct AudioHub(Arc<HubInner>);
 
 impl AudioHub {
     #[allow(clippy::type_complexity)]
-    fn subscribe(&self, client_ip: std::net::IpAddr, mute: bool) -> Result<(AudioSubscription, ServerMessage, Result<(), String>), Error> {
+    fn subscribe(&self, client_ip: Option<std::net::IpAddr>, client_id: String, mute: bool) -> Result<(AudioSubscription, ServerMessage, Result<(), String>), Error> {
         let inner = self.0.clone();
         let mut state = inner.state.lock().unwrap();
         if state.capture.is_none() {
@@ -683,6 +816,8 @@ impl AudioHub {
             socket,
             key,
             client_ip,
+            client_id,
+            relay_tx: Mutex::new(None),
             dest: Mutex::new(None),
             seq: AtomicU32::new(0),
             closed: Default::default(),
@@ -692,13 +827,24 @@ impl AudioHub {
         let mute_result = apply_mute(&mut state);
         let (rate, channels, frames) = state.format;
         drop(state);
-        let listener = subscriber.clone();
-        std::thread::Builder::new().name("portputer-keepalive".into()).spawn(move || keepalive_thread(listener))?;
+        if client_ip.is_some() {
+            let listener = subscriber.clone();
+            std::thread::Builder::new().name("portputer-keepalive".into()).spawn(move || keepalive_thread(listener))?;
+        }
         Ok((
             AudioSubscription { hub: inner, subscriber },
             ServerMessage::AudioReady { port, key: hex::encode(key_bytes), sample_rate: rate, channels, frames },
             mute_result,
         ))
+    }
+}
+
+impl AudioHub {
+    /// Sends a relayed client's audio on its datagram connection.
+    fn attach_relay(&self, client_id: &str, tx: tokio::sync::mpsc::Sender<Vec<u8>>) {
+        for sub in self.0.state.lock().unwrap().subscribers.iter().filter(|s| s.client_id == client_id) {
+            *sub.relay_tx.lock().unwrap() = Some(tx.clone());
+        }
     }
 }
 
@@ -712,7 +858,7 @@ fn keepalive_thread(sub: Arc<Subscriber>) {
     let mut buf = [0u8; 256];
     while !sub.closed.load(Ordering::Relaxed) {
         if let Ok((n, from)) = socket.recv_from(&mut buf) {
-            if from.ip() != sub.client_ip {
+            if Some(from.ip()) != sub.client_ip {
                 continue;
             }
             if let Some((udp::KIND_KEEPALIVE, _, _)) = sub.key.open(&buf[..n]) {
@@ -734,6 +880,13 @@ fn send_thread(hub: Arc<HubInner>, rx: std::sync::mpsc::Receiver<Vec<i16>>, fram
             let packet: Vec<i16> = carry.drain(..samples_per_packet).collect();
             let payload = udp::encode_pcm(&packet);
             for sub in &subscribers {
+                let relay = sub.relay_tx.lock().unwrap().clone();
+                if let Some(tx) = relay {
+                    let seq = sub.seq.fetch_add(1, Ordering::Relaxed);
+                    // Dropped, not queued, when the relay falls behind.
+                    let _ = tx.try_send(sub.key.seal(udp::KIND_AUDIO, seq, &payload));
+                    continue;
+                }
                 let dest = *sub.dest.lock().unwrap();
                 let Some((addr, last)) = dest else { continue };
                 if last.elapsed() > Duration::from_millis(udp::KEEPALIVE_TIMEOUT_MS) {

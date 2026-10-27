@@ -166,13 +166,12 @@ class ConnectedActivity : Activity(), Connection.Listener {
             is Connection.State.Connected -> {
                 val info = state.info
                 title = info.name
-                setStatus(
-                    when {
-                        info.session == SessionType.LOGIN_WINDOW -> getString(R.string.connected_login_window, info.name)
-                        info.user.isNotEmpty() -> getString(R.string.connected_user, info.name, info.user)
-                        else -> getString(R.string.connected_nobody, info.name)
-                    },
-                )
+                val connected = when {
+                    info.session == SessionType.LOGIN_WINDOW -> getString(R.string.connected_login_window, info.name)
+                    info.user.isNotEmpty() -> getString(R.string.connected_user, info.name, info.user)
+                    else -> getString(R.string.connected_nobody, info.name)
+                }
+                setStatus(if (info.viaRelay) "$connected ${getString(R.string.connected_via_relay)}" else connected)
                 disconnect.setText(R.string.disconnect)
                 if (!info.trusted) {
                     pairInstructions.text = getString(R.string.pair_instructions, info.name)

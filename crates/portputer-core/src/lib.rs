@@ -12,6 +12,7 @@ pub mod jitter;
 pub mod keys;
 pub mod platform;
 pub mod protocol;
+pub mod relay;
 pub mod server;
 pub mod transport;
 pub mod udp;

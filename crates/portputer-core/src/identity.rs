@@ -170,6 +170,24 @@ impl ServerStore {
             .unwrap_or_default()
     }
 
+    /// The internet relay the server listens at, if any.
+    pub fn relay(&self) -> Option<crate::relay::RelayConfig> {
+        std::fs::read(self.dir.join("relay.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<crate::relay::RelayConfig>(&b).ok())
+            .filter(|r| r.is_set())
+    }
+
+    pub fn set_relay(&self, relay: Option<&crate::relay::RelayConfig>) -> Result<(), Error> {
+        match relay.filter(|r| r.is_set()) {
+            Some(r) => write_private(&self.dir.join("relay.json"), &serde_json::to_vec_pretty(r)?),
+            None => {
+                let _ = std::fs::remove_file(self.dir.join("relay.json"));
+                Ok(())
+            }
+        }
+    }
+
     pub fn is_paired(&self, public_key: &[u8; 32]) -> bool {
         self.paired().iter().any(|c| &c.public_key == public_key)
     }
@@ -209,6 +227,9 @@ pub struct KnownServer {
     pub macs: Vec<String>,
     #[serde(default)]
     pub last_connected: u64,
+    /// The internet relay the server listens at, which it tells paired clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay: Option<crate::relay::RelayConfig>,
 }
 
 #[derive(Serialize, Deserialize)]

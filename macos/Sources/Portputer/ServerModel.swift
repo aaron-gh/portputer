@@ -17,6 +17,9 @@ final class ServerModel: ObservableObject {
     @Published private(set) var inputAllowed = false
     @Published private(set) var systemComponents = false
     @Published private(set) var microphoneDriver = false
+    @Published var relayURL = ""
+    @Published var relayToken = ""
+    @Published private(set) var relayStatus = "Off."
     @Published private(set) var openAtLogin = false
     @Published var status = ""
 
@@ -84,6 +87,10 @@ final class ServerModel: ObservableObject {
     func refresh() {
         paired = handle?.paired() ?? []
         connected = handle?.connected() ?? []
+        if let saved = handle?.relay(), saved.count == 2, relayURL.isEmpty {
+            relayURL = saved[0]
+            relayToken = saved[1]
+        }
         systemComponents = systemComponentsInstalled()
         microphoneDriver = microphoneDriverInstalled()
         openAtLogin = SMAppService.mainApp.status == .enabled
@@ -132,6 +139,17 @@ final class ServerModel: ObservableObject {
             status = "Open at Login: \(error.localizedDescription)"
         }
         openAtLogin = SMAppService.mainApp.status == .enabled
+    }
+
+    /// Saves the internet relay settings and starts listening there.
+    func saveRelay() {
+        do {
+            try handle?.setRelay(url: relayURL.trimmingCharacters(in: .whitespaces), token: relayToken)
+            relayStatus = relayURL.isEmpty ? "Off." : "Connecting."
+            syncLoginWindow()
+        } catch {
+            relayStatus = error.localizedDescription
+        }
     }
 
     /// Gives the server at the login window the current pairings.
@@ -212,6 +230,8 @@ final class ServerModel: ObservableObject {
             announce(status)
         case .inputNotAllowed:
             inputAllowed = false
+        case .relay(let listening, let message):
+            relayStatus = listening ? "Listening at the relay." : (relayURL.isEmpty ? "Off." : message)
         case .audioFailed(let message):
             status = "Audio: \(message)"
         case .error(let message):

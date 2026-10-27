@@ -65,6 +65,18 @@ struct SettingsView: View {
                 .disabled(!server.running)
             }
 
+            Section("Internet Relay") {
+                Text("Paired devices reach this Mac through the relay when it isn't on their network. The relay is your own Cloudflare Worker, from relay/ in Portputer's source. Paired devices learn its address and token from this Mac.")
+                    .fixedSize(horizontal: false, vertical: true)
+                TextField("Relay address", text: $server.relayURL, prompt: Text("https://portputer-relay.example.workers.dev"))
+                SecureField("Relay token", text: $server.relayToken)
+                HStack {
+                    Button("Save Relay Settings") { server.saveRelay() }
+                    Text(server.relayStatus)
+                        .accessibilityAddTraits(.updatesFrequently)
+                }
+            }
+
             Section("Microphone") {
                 Text("Portputer Microphone is an audio input device for this Mac's apps. It records the microphone of a connected device that has Send Microphone on. Installs a driver with an administrator's password; installing or removing it stops all sound for a moment.")
                     .fixedSize(horizontal: false, vertical: true)
