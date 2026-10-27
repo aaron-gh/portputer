@@ -33,8 +33,13 @@ pub struct MacInjector {
 
 impl MacInjector {
     pub fn new(session: SessionKind) -> MacInjector {
+        MacInjector::with_source(session, true)
+    }
+
+    /// Without an event source, events are made with none.
+    pub fn with_source(session: SessionKind, source: bool) -> MacInjector {
         MacInjector {
-            source: CGEventSource::new(CGEventSourceStateID::HIDSystemState),
+            source: if source { CGEventSource::new(CGEventSourceStateID::HIDSystemState) } else { None },
             held: Held::default(),
             flags: CGEventFlags::empty(),
             session,
@@ -173,6 +178,156 @@ unsafe extern "C" {
     fn AXIsProcessTrusted() -> bool;
 }
 
+/// A key command for the key process at the login window, one JSON line
+/// each; it answers each with a line once it's done.
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum InjectCommand {
+    Key { code: String, down: bool },
+    Repeat { code: String },
+    Tap { code: String, modifiers: Vec<String> },
+    Text { text: String },
+    ReleaseAll,
+}
+
+/// Keys at the login window, through a child process (`portputer-agent
+/// inject`). There, making a key event can hang for good inside SkyLight
+/// (CGSEventSourceForID waits on a lock it holds itself), which would stop
+/// every key after it. A key that isn't done within 1.5 seconds has the
+/// process replaced, alternating between making events with an event source
+/// and without, and is sent once more.
+pub struct ChildInjector {
+    child: Option<std::process::Child>,
+    stdin: Option<std::process::ChildStdin>,
+    acks: Option<std::sync::mpsc::Receiver<()>>,
+    without_source: bool,
+}
+
+impl ChildInjector {
+    pub fn new() -> ChildInjector {
+        ChildInjector { child: None, stdin: None, acks: None, without_source: false }
+    }
+
+    fn start(&mut self) -> bool {
+        let Ok(exe) = std::env::current_exe() else { return false };
+        let mut command = std::process::Command::new(exe);
+        command.arg("inject");
+        if self.without_source {
+            command.arg("--no-source");
+        }
+        let child = command.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn();
+        let Ok(mut child) = child else {
+            tracing::warn!("couldn't start the key process");
+            return false;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        if let Some(out) = child.stdout.take() {
+            std::thread::spawn(move || {
+                for line in BufReader::new(out).lines() {
+                    if line.is_err() || tx.send(()).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        self.stdin = child.stdin.take();
+        self.acks = Some(rx);
+        self.child = Some(child);
+        true
+    }
+
+    fn stop(&mut self) {
+        self.stdin = None;
+        self.acks = None;
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
+    fn send(&mut self, command: &InjectCommand) -> bool {
+        let Ok(mut line) = serde_json::to_string(command) else { return false };
+        line.push('\n');
+        for _ in 0..2 {
+            if self.child.is_none() && !self.start() {
+                return false;
+            }
+            let written = self.stdin.as_mut().is_some_and(|s| s.write_all(line.as_bytes()).and_then(|_| s.flush()).is_ok());
+            let done = written && self.acks.as_ref().is_some_and(|a| a.recv_timeout(Duration::from_millis(1500)).is_ok());
+            if done {
+                return true;
+            }
+            self.stop();
+            self.without_source = !self.without_source;
+            tracing::warn!("a key didn't go through; the key process starts again, making events {}", if self.without_source { "without an event source" } else { "with an event source" });
+        }
+        false
+    }
+}
+
+impl Default for ChildInjector {
+    fn default() -> Self {
+        ChildInjector::new()
+    }
+}
+
+impl Drop for ChildInjector {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+impl Injector for ChildInjector {
+    fn key(&mut self, code: &str, down: bool) -> bool {
+        self.send(&InjectCommand::Key { code: code.into(), down })
+    }
+
+    fn repeat(&mut self, code: &str) -> bool {
+        self.send(&InjectCommand::Repeat { code: code.into() })
+    }
+
+    fn text(&mut self, text: &str) {
+        self.send(&InjectCommand::Text { text: text.into() });
+    }
+
+    fn release_all(&mut self) {
+        if self.child.is_some() {
+            self.send(&InjectCommand::ReleaseAll);
+        }
+    }
+
+    fn tap(&mut self, code: &str, modifiers: &[String]) -> bool {
+        self.send(&InjectCommand::Tap { code: code.into(), modifiers: modifiers.to_vec() })
+    }
+}
+
+/// The key process: commands on standard input, a line back for each.
+pub fn run_injector(without_source: bool) {
+    let mut injector = MacInjector::with_source(SessionKind::LoginWindow, !without_source);
+    let mut out = std::io::stdout();
+    for line in BufReader::new(std::io::stdin()).lines() {
+        let Ok(line) = line else { break };
+        match serde_json::from_str::<InjectCommand>(&line) {
+            Ok(InjectCommand::Key { code, down }) => {
+                injector.key(&code, down);
+            }
+            Ok(InjectCommand::Repeat { code }) => {
+                injector.repeat(&code);
+            }
+            Ok(InjectCommand::Tap { code, modifiers }) => {
+                injector.tap(&code, &modifiers);
+            }
+            Ok(InjectCommand::Text { text }) => injector.text(&text),
+            Ok(InjectCommand::ReleaseAll) => injector.release_all(),
+            Err(_) => {}
+        }
+        if out.write_all(b"ok\n").and_then(|_| out.flush()).is_err() {
+            break;
+        }
+    }
+    injector.release_all();
+}
+
 /// Posting key events is allowed by the Accessibility permission. Both
 /// checks are asked: the post-event preflight can stay false for the life of
 /// the process when permission is given after it starts, while posting works.
@@ -186,16 +341,10 @@ pub fn input_allowed(ask: bool) -> bool {
     false
 }
 
-/// What each check says, for the log, and whether there's an event source
-/// (keys are posted with one when there is).
+/// What each check says, for the log. (No event source is made here: at
+/// the login window, the server itself leaves SkyLight alone.)
 pub fn input_permission_detail() -> String {
-    format!(
-        "accessibility={} post_event={} event_source={} uid={}",
-        unsafe { AXIsProcessTrusted() },
-        CGPreflightPostEventAccess(),
-        CGEventSource::new(CGEventSourceStateID::HIDSystemState).is_some(),
-        unsafe { libc::geteuid() }
-    )
+    format!("accessibility={} post_event={} uid={}", unsafe { AXIsProcessTrusted() }, CGPreflightPostEventAccess(), unsafe { libc::geteuid() })
 }
 
 /// Whether posted keys reach macOS here, for the log at the login window:

@@ -57,6 +57,12 @@ impl Held {
 }
 
 pub fn new_injector(session: SessionKind) -> Box<dyn Injector> {
+    // At the login window, through a child process that can be replaced
+    // when posting hangs (see ChildInjector).
+    #[cfg(target_os = "macos")]
+    if session == SessionKind::LoginWindow && macos::is_root() {
+        return Box::new(macos::ChildInjector::new());
+    }
     #[cfg(target_os = "macos")]
     return Box::new(macos::MacInjector::new(session));
     #[cfg(windows)]
