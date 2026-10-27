@@ -30,6 +30,10 @@
 			<string>F6A4205F-4179-4AFA-B274-55D87964FD52</string>
 		</array>
 	</dict>
+	<key>AudioServerPlugIn_MachServices</key>
+	<array>
+		<string>io.github.aaron-gh.portputer.audio</string>
+	</array>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 </dict>

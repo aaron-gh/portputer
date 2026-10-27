@@ -122,6 +122,8 @@ pub struct Server {
 
 impl Server {
     pub fn start(config: ServerConfig) -> Result<Server, Error> {
+        #[cfg(target_os = "macos")]
+        audio::loopback::use_for_capture(config.session == SessionKind::LoginWindow);
         let store = ServerStore::new(&config.store_dir);
         let identity = store.identity()?;
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -507,7 +509,7 @@ async fn serve(shared: Arc<Shared>, stream: transport::BoxStream, address: Optio
                     writer
                         .send(&ServerMessage::Error {
                             code: errors::AUDIO_FAILED.into(),
-                            message: "Computer Audio isn't available at the login window: macOS allows recording system audio only in a logged-in user's session.".into(),
+                            message: "Computer Audio at the login window needs the Portputer Microphone driver: on the Mac, Portputer Settings, Microphone, Install.".into(),
                         })
                         .await?;
                 }
@@ -706,12 +708,21 @@ fn microphone_available() -> bool {
 type MicInputs = Mutex<HashMap<String, (PacketKey, Arc<Mutex<crate::jitter::JitterBuffer>>)>>;
 
 /// Whether this server can send the computer's audio. At the Mac login
-/// window it can't: Core Audio taps need the System Audio Recording
-/// permission, which nobody can grant the login window's server (it runs as
-/// root), so the tap records silence. The test tone needs no tap.
+/// window, Core Audio taps would need the System Audio Recording
+/// permission, which nobody can grant there, so the audio goes through
+/// Portputer's driver instead (audio::loopback), when it's installed. The
+/// test tone needs neither.
 fn audio_available(session: SessionKind) -> bool {
-    cfg!(windows)
-        || (cfg!(target_os = "macos") && (session == SessionKind::User || std::env::var_os("PORTPUTER_TEST_TONE").is_some()))
+    if cfg!(windows) || std::env::var_os("PORTPUTER_TEST_TONE").is_some() {
+        return true;
+    }
+    #[cfg(target_os = "macos")]
+    return session == SessionKind::User || audio::loopback::available();
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = session;
+        false
+    }
 }
 
 /// The computer's end of a TURN path to a relayed client's relayed

@@ -24,8 +24,8 @@ int main(int argc, char** argv) {
     AudioObjectPropertyAddress a = {kAudioPlugInPropertyDeviceList, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
     AudioObjectID devices[4];
     size = sizeof(devices);
-    CHECK((*d)->GetPropertyData(d, 1, 0, &a, 0, NULL, size, &size, devices) == 0 && size == 2 * sizeof(AudioObjectID), "device list");
-    for (int i = 0; i < 2; i++) {
+    CHECK((*d)->GetPropertyData(d, 1, 0, &a, 0, NULL, size, &size, devices) == 0 && size == 3 * sizeof(AudioObjectID), "device list");
+    for (int i = 0; i < 3; i++) {
         CFStringRef name = NULL;
         a.mSelector = kAudioObjectPropertyName;
         CHECK((*d)->GetPropertyData(d, devices[i], 0, &a, 0, NULL, sizeof(name), &size, &name) == 0, "name");
@@ -70,6 +70,24 @@ int main(int argc, char** argv) {
     CHECK(in[0] == 0 && in[511] == 0, "silence where nothing was written");
     (*d)->StopIO(d, devices[0], 0);
     (*d)->StopIO(d, devices[1], 0);
+    // The speakers: stereo, 44.1 or 48 kHz, and they take what's played.
+    a.mSelector = kAudioDevicePropertyAvailableNominalSampleRates;
+    a.mScope = kAudioObjectPropertyScopeGlobal;
+    AudioValueRange rates[4];
+    CHECK((*d)->GetPropertyData(d, devices[2], 0, &a, 0, NULL, sizeof(rates), &size, rates) == 0 && size == 2 * sizeof(AudioValueRange), "speaker rates");
+    CHECK(rates[0].mMinimum == 44100 && rates[1].mMinimum == 48000, "speaker rate values");
+    a.mSelector = kAudioDevicePropertyDeviceCanBeDefaultDevice;
+    UInt32 canDefault = 0;
+    (*d)->GetPropertyData(d, devices[2], 0, &a, 0, NULL, sizeof(canDefault), &size, &canDefault);
+    CHECK(canDefault == 1, "speakers can be the default output");
+    CHECK((*d)->StartIO(d, devices[2], 0) == 0, "speakers start");
+    Boolean willDo = false, inPlace = false;
+    (*d)->WillDoIOOperation(d, devices[2], 0, kAudioServerPlugInIOOperationWriteMix, &willDo, &inPlace);
+    CHECK(willDo, "speakers take the mix");
+    Float32 stereo[1024];
+    for (int i = 0; i < 1024; i++) stereo[i] = 0.5f;
+    CHECK((*d)->DoIOOperation(d, devices[2], 7, 0, kAudioServerPlugInIOOperationWriteMix, 512, &cycle, stereo, NULL) == 0, "speakers write");
+    (*d)->StopIO(d, devices[2], 0);
     printf("OK\n");
     return 0;
 }

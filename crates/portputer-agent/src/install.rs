@@ -62,7 +62,9 @@ pub fn install() -> ! {
         let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755));
         std::fs::rename(&tmp, AGENT).unwrap_or_else(|e| fail(format!("{AGENT}: {e}")));
     }
-    write(DAEMON_PLIST, &plist(DAEMON_LABEL, &[AGENT, "helper"], "", "helper.log"), 0o644);
+    // The Mach service Portputer's driver sends Portputer Speakers to.
+    let services = format!("\t<key>MachServices</key>\n\t<dict>\n\t\t<key>{}</key>\n\t\t<true/>\n\t</dict>\n", crate::loopback::SERVICE);
+    write(DAEMON_PLIST, &plist(DAEMON_LABEL, &[AGENT, "helper"], &services, "helper.log"), 0o644);
     let login_extra = "\t<key>LimitLoadToSessionType</key>\n\t<string>LoginWindow</string>\n";
     write(LOGIN_PLIST, &plist(LOGIN_LABEL, &[AGENT, "serve", "--login-window"], login_extra, "loginwindow.log"), 0o644);
     launchctl(&["bootout", &format!("system/{DAEMON_LABEL}")]);

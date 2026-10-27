@@ -3,7 +3,8 @@
 //! identity and paired devices to where the server at the login window reads
 //! them. It answers local processes on a Unix socket, checking who they are
 //! from the socket: power actions for the person at the console or an
-//! administrator, copying pairings for administrators only.
+//! administrator, copying pairings for administrators only, and what's
+//! played to Portputer Speakers for root only (see loopback.rs).
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -33,8 +34,11 @@ pub fn run() -> ! {
     // Anyone may connect; each request is checked against who sent it.
     let _ = std::fs::set_permissions(HELPER_SOCKET, std::fs::Permissions::from_mode(0o666));
     tracing::info!("helper listening on {HELPER_SOCKET}");
+    let subscribers = crate::loopback::Subscribers::default();
+    crate::loopback::start(subscribers.clone());
     for stream in listener.incoming().flatten() {
-        std::thread::spawn(move || handle(stream));
+        let subscribers = subscribers.clone();
+        std::thread::spawn(move || handle(stream, &subscribers));
     }
     std::process::exit(0)
 }
@@ -67,24 +71,32 @@ fn console_uid() -> Option<libc::uid_t> {
     std::fs::metadata("/dev/console").ok().map(|m| m.uid())
 }
 
-fn handle(stream: UnixStream) {
+fn handle(stream: UnixStream, subscribers: &crate::loopback::Subscribers) {
     let Some(uid) = peer_uid(&stream) else { return };
     let mut line = String::new();
     let mut reader = BufReader::new(&stream);
     if reader.read_line(&mut line).is_err() {
         return;
     }
-    let reply = match serde_json::from_str::<HelperRequest>(&line) {
+    let request = serde_json::from_str::<HelperRequest>(&line);
+    let audio = matches!(&request, Ok(r) if r.audio);
+    let reply = match request {
+        Ok(request) if request.audio => {
+            if uid == 0 { Ok(()) } else { Err("Only Portputer's server at the login window can do that.".into()) }
+        }
         Ok(request) => answer(uid, request),
         Err(e) => Err(format!("bad request: {e}")),
     };
+    let subscribe = audio && reply.is_ok();
     let reply = match reply {
         Ok(()) => HelperReply { ok: true, error: String::new() },
         Err(error) => HelperReply { ok: false, error },
     };
     let mut out = serde_json::to_string(&reply).unwrap_or_default();
     out.push('\n');
-    let _ = (&stream).write_all(out.as_bytes());
+    if (&stream).write_all(out.as_bytes()).is_ok() && subscribe {
+        crate::loopback::subscribe(subscribers, &stream);
+    }
 }
 
 fn answer(uid: libc::uid_t, request: HelperRequest) -> Result<(), String> {

@@ -39,6 +39,10 @@ pub fn start_capture(on_audio: impl FnMut(&[f32], usize) + Send + 'static) -> Re
     if std::env::var_os("PORTPUTER_TEST_TONE").is_some() {
         return Ok(test_tone(on_audio));
     }
+    #[cfg(target_os = "macos")]
+    if loopback::in_use() {
+        return loopback::start(on_audio);
+    }
 
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(u32, u16), String>>();
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
@@ -446,7 +450,12 @@ pub mod feed {
     pub const FEED_UID: &str = "io.github.aaron-gh.portputer.microphone-feed";
 
     fn device() -> Option<AudioObjectID> {
-        let uid = CFString::from_str(FEED_UID);
+        device_for(FEED_UID)
+    }
+
+    /// The device with this UID, if Core Audio has it.
+    pub(crate) fn device_for(uid: &str) -> Option<AudioObjectID> {
+        let uid = CFString::from_str(uid);
         let uid_ref: *const CFString = &*uid;
         let address = AudioObjectPropertyAddress {
             mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
@@ -638,5 +647,248 @@ pub mod feed {
             )
         };
         format!("audio probe: {input}; default output {output} (read {get}, set to itself {set})")
+    }
+}
+
+/// Computer audio at the Mac login window. macOS lets no one there record
+/// system audio (taps and inputs both need permissions that nobody at the
+/// login window can grant), so Portputer's driver does it: while a device
+/// listens, Portputer Speakers is made the default output, beside the
+/// speakers in a private multi-output device (or alone, with Mute Computer
+/// Speakers), and the driver passes what's played to it to the helper
+/// daemon, which passes it on here. The outputs are put back afterwards.
+#[cfg(target_os = "macos")]
+pub mod loopback {
+    use std::ptr::NonNull;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use objc2_core_audio::{
+        AudioHardwareCreateAggregateDevice, AudioHardwareDestroyAggregateDevice, AudioObjectGetPropertyData, AudioObjectID,
+        AudioObjectPropertyAddress, AudioObjectPropertySelector, AudioObjectSetPropertyData, kAudioDevicePropertyDeviceUID,
+        kAudioDevicePropertyNominalSampleRate, kAudioHardwarePropertyDefaultOutputDevice,
+        kAudioHardwarePropertyDefaultSystemOutputDevice, kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal,
+        kAudioObjectSystemObject,
+    };
+    use objc2_core_foundation::{CFArray, CFDictionary, CFNumber, CFRetained, CFString, CFType};
+
+    use super::{Capture, StreamThread};
+    use crate::Error;
+    use crate::platform::macos::{HELPER_SOCKET, LoopbackChunk, helper_audio};
+
+    pub const SPEAKERS_UID: &str = "io.github.aaron-gh.portputer.speakers";
+
+    static IN_USE: AtomicBool = AtomicBool::new(false);
+
+    /// Set by the server at the login window: its capture goes through here.
+    pub fn use_for_capture(on: bool) {
+        IN_USE.store(on, Ordering::Relaxed);
+    }
+
+    pub fn in_use() -> bool {
+        IN_USE.load(Ordering::Relaxed)
+    }
+
+    /// Whether the driver has Portputer Speakers and the helper is there.
+    pub fn available() -> bool {
+        super::feed::device_for(SPEAKERS_UID).is_some() && std::path::Path::new(HELPER_SOCKET).exists()
+    }
+
+    struct Routing {
+        speakers: AudioObjectID,
+        previous: AudioObjectID,
+        previous_system: AudioObjectID,
+        aggregate: Option<AudioObjectID>,
+    }
+
+    static ROUTING: Mutex<Option<Routing>> = Mutex::new(None);
+
+    fn address(selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress { mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain }
+    }
+
+    fn get_device(selector: AudioObjectPropertySelector) -> AudioObjectID {
+        let a = address(selector);
+        let mut id: AudioObjectID = 0;
+        let mut size = std::mem::size_of::<AudioObjectID>() as u32;
+        unsafe {
+            AudioObjectGetPropertyData(kAudioObjectSystemObject as AudioObjectID, NonNull::from(&a), 0, std::ptr::null(), NonNull::from(&mut size), NonNull::from(&mut id).cast())
+        };
+        id
+    }
+
+    fn set_device(selector: AudioObjectPropertySelector, id: AudioObjectID) -> i32 {
+        let a = address(selector);
+        unsafe {
+            AudioObjectSetPropertyData(
+                kAudioObjectSystemObject as AudioObjectID,
+                NonNull::from(&a),
+                0,
+                std::ptr::null(),
+                std::mem::size_of::<AudioObjectID>() as u32,
+                NonNull::from(&id).cast(),
+            )
+        }
+    }
+
+    fn uid_of(device: AudioObjectID) -> Option<CFRetained<CFString>> {
+        let a = address(kAudioDevicePropertyDeviceUID);
+        let mut uid: *const CFString = std::ptr::null();
+        let mut size = std::mem::size_of::<*const CFString>() as u32;
+        let status = unsafe { AudioObjectGetPropertyData(device, NonNull::from(&a), 0, std::ptr::null(), NonNull::from(&mut size), NonNull::from(&mut uid).cast()) };
+        if status != 0 {
+            return None;
+        }
+        NonNull::new(uid as *mut CFString).map(|p| unsafe { CFRetained::from_raw(p) })
+    }
+
+    fn rate_of(device: AudioObjectID) -> f64 {
+        let a = address(kAudioDevicePropertyNominalSampleRate);
+        let mut rate = 0f64;
+        let mut size = std::mem::size_of::<f64>() as u32;
+        unsafe { AudioObjectGetPropertyData(device, NonNull::from(&a), 0, std::ptr::null(), NonNull::from(&mut size), NonNull::from(&mut rate).cast()) };
+        rate
+    }
+
+    /// A private multi-output device: the output in use, which keeps the
+    /// clock, and Portputer Speakers.
+    fn make_aggregate(output: AudioObjectID) -> Result<AudioObjectID, String> {
+        let output_uid = uid_of(output).ok_or("the output device has no UID")?;
+        let key = |k: &str| CFString::from_str(k);
+        let sub = |uid: &CFString, drift: bool| -> CFRetained<CFDictionary<CFString, CFType>> {
+            let (k_uid, k_drift) = (key("uid"), key("drift"));
+            let flag = CFNumber::new_i32(drift as i32);
+            CFDictionary::from_slices(&[&*k_uid, &*k_drift], &[uid.as_ref(), flag.as_ref()])
+        };
+        let speakers_uid = CFString::from_str(SPEAKERS_UID);
+        let subdevices = CFArray::from_retained_objects(&[sub(&output_uid, false), sub(&speakers_uid, true)]);
+        let (name, uid) = (CFString::from_str("Portputer Login Window Output"), CFString::from_str(&format!("io.github.aaron-gh.portputer.multi-output.{}", std::process::id())));
+        let yes = CFNumber::new_i32(1);
+        let keys = [key("name"), key("uid"), key("private"), key("stacked"), key("master"), key("subdevices")];
+        let key_refs: Vec<&CFString> = keys.iter().map(|k| &**k).collect();
+        let values: [&CFType; 6] = [name.as_ref(), uid.as_ref(), yes.as_ref(), yes.as_ref(), output_uid.as_ref(), subdevices.as_ref()];
+        let description = CFDictionary::<CFString, CFType>::from_slices(&key_refs, &values);
+        let mut id: AudioObjectID = 0;
+        let status = unsafe { AudioHardwareCreateAggregateDevice(description.as_opaque(), NonNull::from(&mut id)) };
+        if status != 0 || id == 0 {
+            return Err(format!("Core Audio error {status} making the multi-output device"));
+        }
+        Ok(id)
+    }
+
+    /// Plays to Portputer Speakers alone (muted) or beside the speakers.
+    fn route(routing: &mut Routing, muted: bool) -> Result<(), String> {
+        let target = if muted {
+            routing.speakers
+        } else {
+            match routing.aggregate {
+                Some(a) => a,
+                None => {
+                    let a = make_aggregate(routing.previous)?;
+                    routing.aggregate = Some(a);
+                    a
+                }
+            }
+        };
+        let status = set_device(kAudioHardwarePropertyDefaultOutputDevice, target);
+        if status != 0 {
+            return Err(format!("Core Audio error {status} setting the output device"));
+        }
+        set_device(kAudioHardwarePropertyDefaultSystemOutputDevice, target);
+        Ok(())
+    }
+
+    fn restore() {
+        if let Some(routing) = ROUTING.lock().unwrap().take() {
+            set_device(kAudioHardwarePropertyDefaultOutputDevice, routing.previous);
+            set_device(kAudioHardwarePropertyDefaultSystemOutputDevice, routing.previous_system);
+            if let Some(a) = routing.aggregate {
+                unsafe { AudioHardwareDestroyAggregateDevice(a) };
+            }
+        }
+    }
+
+    /// Mute Computer Speakers while listening at the login window.
+    pub fn set_muted(muted: bool) -> Result<(), String> {
+        match ROUTING.lock().unwrap().as_mut() {
+            Some(routing) => route(routing, muted),
+            None => Ok(()),
+        }
+    }
+
+    /// Checks the routing in a logged-in session: a quiet tone for a second
+    /// to the speakers and Portputer Speakers together, then the outputs as
+    /// they were. The helper logs when the driver's audio reaches it.
+    pub fn test() -> Result<String, String> {
+        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+        let speakers = super::feed::device_for(SPEAKERS_UID).ok_or("the driver has no Portputer Speakers; update it")?;
+        let previous = get_device(kAudioHardwarePropertyDefaultOutputDevice);
+        let mut routing = Routing { speakers, previous, previous_system: get_device(kAudioHardwarePropertyDefaultSystemOutputDevice), aggregate: None };
+        route(&mut routing, false)?;
+        let aggregate = routing.aggregate;
+        *ROUTING.lock().unwrap() = Some(routing);
+        let played = (|| -> Result<(), String> {
+            let device = cpal::default_host().default_output_device().ok_or("no output device")?;
+            let config = device.default_output_config().map_err(|e| e.to_string())?.config();
+            let (rate, channels) = (config.sample_rate as f32, config.channels as usize);
+            let mut phase = 0f32;
+            let stream = device
+                .build_output_stream::<f32, _, _>(
+                    config,
+                    move |data, _| {
+                        for frame in data.chunks_mut(channels) {
+                            phase = (phase + 660.0 / rate).fract();
+                            let v = (phase * std::f32::consts::TAU).sin() * 0.05;
+                            frame.iter_mut().for_each(|s| *s = v);
+                        }
+                    },
+                    |e| tracing::warn!("test tone: {e}"),
+                    None,
+                )
+                .map_err(|e| e.to_string())?;
+            stream.play().map_err(|e| e.to_string())?;
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+            Ok(())
+        })();
+        let rate = rate_of(speakers);
+        restore();
+        played?;
+        Ok(format!("played through multi-output device {aggregate:?} with Portputer Speakers at {rate} Hz; outputs put back"))
+    }
+
+    pub fn start(mut on_audio: impl FnMut(&[f32], usize) + Send + 'static) -> Result<Capture, Error> {
+        let speakers = super::feed::device_for(SPEAKERS_UID)
+            .ok_or_else(|| Error::Audio("Computer Audio at the login window needs the Portputer Microphone driver, from Portputer's Settings, Microphone.".into()))?;
+        let mut stream = helper_audio().map_err(Error::Audio)?;
+        restore();
+        let previous = get_device(kAudioHardwarePropertyDefaultOutputDevice);
+        let mut routing = Routing { speakers, previous, previous_system: get_device(kAudioHardwarePropertyDefaultSystemOutputDevice), aggregate: None };
+        if let Err(e) = route(&mut routing, false) {
+            if let Some(a) = routing.aggregate {
+                unsafe { AudioHardwareDestroyAggregateDevice(a) };
+            }
+            return Err(Error::Audio(e));
+        }
+        *ROUTING.lock().unwrap() = Some(routing);
+        let rate = rate_of(speakers).max(1.0) as u32;
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+        let thread = std::thread::Builder::new().name("portputer-loopback".into()).spawn(move || {
+            loop {
+                if !matches!(stop_rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)) {
+                    break;
+                }
+                match LoopbackChunk::read(&mut stream) {
+                    Ok(chunk) => on_audio(&chunk.samples, chunk.channels as usize),
+                    Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
+                    Err(e) => {
+                        tracing::warn!("Portputer Speakers: {e}");
+                        break;
+                    }
+                }
+            }
+            restore();
+        })?;
+        Ok(Capture { rate, channels: 2, _thread: StreamThread { stop: Some(stop_tx), thread: Some(thread) } })
     }
 }

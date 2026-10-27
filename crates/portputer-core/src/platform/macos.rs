@@ -2,7 +2,7 @@
 //! keys as system-defined events, power through loginwindow's Apple events
 //! or, for what needs root, Portputer's helper daemon.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
@@ -322,6 +322,64 @@ pub struct HelperRequest {
     /// With `sync`: the relay settings (relay.json), or none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relay: Option<String>,
+    /// For root only (the server at the login window): after the reply, the
+    /// connection carries what's played to Portputer Speakers, as
+    /// [`LoopbackChunk`]s.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub audio: bool,
+}
+
+/// Audio from Portputer Speakers, from the helper: rate, channels and frame
+/// count (u32, native byte order), then the interleaved 32-bit float samples.
+pub struct LoopbackChunk {
+    pub rate: u32,
+    pub channels: u32,
+    pub samples: Vec<f32>,
+}
+
+impl LoopbackChunk {
+    pub fn encode(&self, out: &mut Vec<u8>) {
+        out.clear();
+        out.extend_from_slice(&self.rate.to_ne_bytes());
+        out.extend_from_slice(&self.channels.to_ne_bytes());
+        out.extend_from_slice(&((self.samples.len() / self.channels.max(1) as usize) as u32).to_ne_bytes());
+        for s in &self.samples {
+            out.extend_from_slice(&s.to_ne_bytes());
+        }
+    }
+
+    pub fn read(stream: &mut impl Read) -> std::io::Result<LoopbackChunk> {
+        let mut head = [0u8; 12];
+        stream.read_exact(&mut head)?;
+        let word = |i: usize| u32::from_ne_bytes(head[i * 4..i * 4 + 4].try_into().unwrap());
+        let (rate, channels, frames) = (word(0), word(1), word(2));
+        if channels == 0 || channels > 8 || frames > 8192 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "bad audio chunk"));
+        }
+        let mut bytes = vec![0u8; (frames * channels) as usize * 4];
+        stream.read_exact(&mut bytes)?;
+        let samples = bytes.chunks_exact(4).map(|b| f32::from_ne_bytes(b.try_into().unwrap())).collect();
+        Ok(LoopbackChunk { rate, channels, samples })
+    }
+}
+
+/// Connects to the helper for what's played to Portputer Speakers.
+pub fn helper_audio() -> Result<UnixStream, String> {
+    let mut stream = UnixStream::connect(HELPER_SOCKET).map_err(|_| "Portputer's system components aren't installed".to_string())?;
+    stream.write_all(b"{\"audio\":true}\n").map_err(|e| e.to_string())?;
+    // The reply line, read a byte at a time so nothing after it is taken.
+    let mut reply = Vec::new();
+    let mut byte = [0u8; 1];
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+    while stream.read_exact(&mut byte).is_ok() && byte[0] != b'\n' {
+        reply.push(byte[0]);
+    }
+    let reply: HelperReply = serde_json::from_slice(&reply).map_err(|e| e.to_string())?;
+    if !reply.ok {
+        return Err(reply.error);
+    }
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+    Ok(stream)
 }
 
 #[derive(Serialize, Deserialize, Debug)]

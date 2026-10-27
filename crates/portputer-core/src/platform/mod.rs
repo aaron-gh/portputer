@@ -130,6 +130,10 @@ pub fn set_speakers_muted(muted: bool) -> Result<(), String> {
         return Ok(());
     }
     #[cfg(target_os = "macos")]
+    if crate::audio::loopback::in_use() {
+        return crate::audio::loopback::set_muted(muted);
+    }
+    #[cfg(target_os = "macos")]
     return macos::set_speakers_muted(muted);
     #[cfg(windows)]
     return windows::set_speakers_muted(muted);

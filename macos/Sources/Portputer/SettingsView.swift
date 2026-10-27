@@ -85,7 +85,7 @@ struct SettingsView: View {
             }
 
             Section("Microphone") {
-                Text("Portputer Microphone is an audio input device for this Mac's apps. It records the microphone of a connected device that has Send Microphone on. Installs a driver with an administrator's password; installing or removing it stops all sound for a moment.")
+                Text("Portputer Microphone is an audio input device for this Mac's apps. It records the microphone of a connected device that has Send Microphone on. The driver also sends this Mac's audio at the login window, where macOS allows no other way. Installs with an administrator's password; installing or removing it stops all sound for a moment.")
                     .fixedSize(horizontal: false, vertical: true)
                 LabeledContent("Portputer Microphone driver") {
                     HStack {
