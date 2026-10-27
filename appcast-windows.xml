@@ -5,6 +5,21 @@
         <description>Updates for Portputer on Windows.</description>
         <language>en</language>
         <item>
+            <title>Version 0.1.1</title>
+            <pubDate>Tue, 27 Oct 2026 12:36:24 -0000</pubDate>
+            <sparkle:version>45</sparkle:version>
+            <sparkle:shortVersionString>0.1.1</sparkle:shortVersionString>
+            <description><![CDATA[<ul>
+<li>Typing at the Mac login window works, VoiceOver keys included.</li>
+<li>Computer Audio at the Mac login window, with the Portputer Microphone driver installed (Settings, Microphone).</li>
+<li>After the login window, the Mac's audio outputs are put back as they were.</li>
+<li>After a restart, the Mac's login window server reconnects to the internet relay sooner, and devices find it on more of its addresses.</li>
+<li>After updating Portputer on the Mac, Settings shows Update beside login window support and the microphone driver when they're from the older version. Updating them needs an administrator's password.</li>
+</ul>
+]]></description>
+            <enclosure url="https://github.com/aaron-gh/portputer/releases/download/v0.1.1/Portputer-0.1.1-windows-x64-setup.exe" sparkle:edSignature="Md3+YlGZb5Bmbl483tVCKQ1ipWsWPqSEdInMNys40RqTotKNzhF3rnNGOVDSaBXnhASPmNWGHCwt0hTM4Kv7DQ==" length="6798590" type="application/octet-stream" sparkle:os="windows-x64" sparkle:installerArguments="/S" />
+        </item>
+        <item>
             <title>Version 0.1.0</title>
             <pubDate>Tue, 27 Oct 2026 11:01:18 -0000</pubDate>
             <sparkle:version>27</sparkle:version>
