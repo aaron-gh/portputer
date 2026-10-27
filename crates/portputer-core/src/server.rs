@@ -63,6 +63,10 @@ struct Shared {
     audio: AudioHub,
     observer: Option<Arc<dyn ServerObserver>>,
     next_conn: AtomicU64,
+    clipboard_batch: crate::files::ClipboardBatch,
+    /// The clipboard's change count after Portputer last wrote it, so that
+    /// isn't sent back.
+    own_clipboard: std::sync::atomic::AtomicI64,
 }
 
 impl Shared {
@@ -118,8 +122,12 @@ impl Server {
             audio: AudioHub::default(),
             observer: config.observer,
             next_conn: AtomicU64::new(1),
+            clipboard_batch: Default::default(),
+            own_clipboard: std::sync::atomic::AtomicI64::new(-1),
         });
-        if !platform::input_allowed(session == SessionKind::User) {
+        // PORTPUTER_NO_PROMPT keeps tests from asking for permission.
+        let ask = session == SessionKind::User && std::env::var_os("PORTPUTER_NO_PROMPT").is_none();
+        if !platform::input_allowed(ask) {
             shared.emit(ServerEvent::InputNotAllowed);
         }
         let accept = shared.clone();
@@ -236,8 +244,8 @@ async fn serve(shared: Arc<Shared>, stream: tokio::net::TcpStream, address: Sock
         .map_err(|_| Error::Protocol("handshake timed out".into()))??;
     let client_key = hs.remote_static;
     let client_id = id_of(&client_key);
-    let (name, protocol) = match serde_json::from_slice::<ClientMessage>(&hs.payload) {
-        Ok(ClientMessage::Hello { name, protocol }) => (name, protocol),
+    let (name, protocol, transfer) = match serde_json::from_slice::<ClientMessage>(&hs.payload) {
+        Ok(ClientMessage::Hello { name, protocol, transfer }) => (name, protocol, transfer),
         _ => return Err(Error::Protocol("no hello".into())),
     };
     let writer = hs.writer.clone();
@@ -272,14 +280,24 @@ async fn serve(shared: Arc<Shared>, stream: tokio::net::TcpStream, address: Sock
             audio: cfg!(any(target_os = "macos", windows)),
             mute: platform::can_mute_speakers(),
             mic: microphone_available(),
+            files: files_available(shared.session),
         })
         .await?;
+    if transfer {
+        shared.clients.lock().unwrap().remove(&conn);
+        if !paired || !files_available(shared.session) {
+            writer.send(&ServerMessage::Error { code: errors::UNSUPPORTED.into(), message: "File transfer isn't available.".into() }).await?;
+            return Ok(());
+        }
+        return crate::files::serve(reader, writer, &shared.clipboard_batch, &shared.own_clipboard).await;
+    }
     if paired && !platform::input_allowed(false) {
         writer.send(&input_notice()).await?;
     }
 
     let mut audio: Option<AudioSubscription> = None;
     let mut mic: Option<MicSink> = None;
+    let mut clipboard_watch: Option<tokio::task::JoinHandle<()>> = None;
     let result: Result<(), Error> = async {
         loop {
             let message: ClientMessage = tokio::time::timeout(Duration::from_secs(30), reader.recv())
@@ -388,6 +406,24 @@ async fn serve(shared: Arc<Shared>, stream: tokio::net::TcpStream, address: Sock
                         }
                     }
                 }
+                ClientMessage::ClipboardWatch { on } => {
+                    if let Some(w) = clipboard_watch.take() {
+                        w.abort();
+                    }
+                    if on && files_available(shared.session) {
+                        clipboard_watch = Some(tokio::spawn(watch_clipboard(shared.clone(), writer.clone())));
+                    }
+                }
+                ClientMessage::ClipboardText { text } => {
+                    if files_available(shared.session) {
+                        let shared = shared.clone();
+                        tokio::task::spawn_blocking(move || {
+                            if crate::clipboard::write_text(&text).is_ok() {
+                                shared.own_clipboard.store(crate::clipboard::change_count(), Ordering::SeqCst);
+                            }
+                        });
+                    }
+                }
                 ClientMessage::MicStop => {
                     mic = None;
                     writer.send(&ServerMessage::MicStopped { reason: "stopped".into() }).await?;
@@ -420,6 +456,9 @@ async fn serve(shared: Arc<Shared>, stream: tokio::net::TcpStream, address: Sock
 
     drop(audio);
     drop(mic);
+    if let Some(w) = clipboard_watch.take() {
+        w.abort();
+    }
     let _ = shared.input.send(InputCommand::ReleaseAll);
     shared.clients.lock().unwrap().remove(&conn);
     shared.emit(ServerEvent::Disconnected { client_id, name });
@@ -437,6 +476,52 @@ fn input_notice() -> ServerMessage {
         "Portputer can't type on this computer."
     };
     ServerMessage::Notice { code: notices::INPUT_PERMISSION.into(), message: message.into() }
+}
+
+/// Clipboard and files, for a logged-in user only: the server at the login
+/// window runs as root.
+fn files_available(session: SessionKind) -> bool {
+    session == SessionKind::User && crate::clipboard::available()
+}
+
+/// Text copied on this computer is the most that's sent in one message.
+const MAX_CLIPBOARD_TEXT: usize = 60_000;
+
+/// Sends the clipboard to a client whenever something new is copied.
+async fn watch_clipboard(shared: Arc<Shared>, writer: transport::Writer) {
+    let mut last = crate::clipboard::change_count();
+    let mut tick = tokio::time::interval(Duration::from_millis(500));
+    loop {
+        tick.tick().await;
+        let count = crate::clipboard::change_count();
+        if count == last {
+            continue;
+        }
+        last = count;
+        if count == shared.own_clipboard.load(Ordering::SeqCst) {
+            continue;
+        }
+        let message = match tokio::task::spawn_blocking(crate::clipboard::read).await.ok().flatten() {
+            Some(crate::clipboard::Clip::Text(text)) if text.len() <= MAX_CLIPBOARD_TEXT => ServerMessage::ClipboardText { text },
+            Some(crate::clipboard::Clip::Files(paths)) => {
+                let files: Vec<crate::protocol::FileInfo> = paths
+                    .iter()
+                    .filter_map(|p| {
+                        let meta = std::fs::metadata(p).ok().filter(|m| m.is_file())?;
+                        Some(crate::protocol::FileInfo { name: p.file_name()?.to_string_lossy().into_owned(), size: meta.len() })
+                    })
+                    .collect();
+                if files.is_empty() {
+                    continue;
+                }
+                ServerMessage::ClipboardFiles { files }
+            }
+            _ => continue,
+        };
+        if writer.send(&message).await.is_err() {
+            return;
+        }
+    }
 }
 
 /// Whether this computer can offer a client's microphone to its apps.

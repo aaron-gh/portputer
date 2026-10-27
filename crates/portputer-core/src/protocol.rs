@@ -40,7 +40,13 @@ pub enum PowerAction {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
     /// The payload of the third handshake message.
-    Hello { name: String, protocol: u32 },
+    /// `transfer` opens a file transfer connection instead of a control one.
+    Hello {
+        name: String,
+        protocol: u32,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        transfer: bool,
+    },
     /// Proof of the pairing code: HMAC-SHA256 over "client" and the
     /// handshake hash, keyed with the normalised code, in hex.
     Pair { proof: String },
@@ -67,6 +73,10 @@ pub enum ClientMessage {
     /// its apps as Portputer Microphone.
     MicStart,
     MicStop,
+    /// Sends the server's clipboard whenever it changes.
+    ClipboardWatch { on: bool },
+    /// Puts text on the server's clipboard.
+    ClipboardText { text: String },
     Power {
         action: PowerAction,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -98,6 +108,9 @@ pub enum ServerMessage {
         /// Whether the computer has the Portputer Microphone driver.
         #[serde(default)]
         mic: bool,
+        /// Clipboard and file transfer are available.
+        #[serde(default)]
+        files: bool,
     },
     /// The server's half of the pairing proof: "server" and the handshake
     /// hash.
@@ -118,7 +131,17 @@ pub enum ServerMessage {
     /// Where to send microphone packets (kind 3, 48 kHz mono, 5 ms), and their key.
     MicReady { port: u16, key: String },
     MicStopped { reason: String },
+    /// Text copied on the server.
+    ClipboardText { text: String },
+    /// Files copied on the server; fetched over a transfer connection.
+    ClipboardFiles { files: Vec<FileInfo> },
     Pong { n: u64 },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FileInfo {
+    pub name: String,
+    pub size: u64,
 }
 
 pub mod errors {

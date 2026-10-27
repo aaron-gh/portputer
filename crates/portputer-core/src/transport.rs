@@ -103,13 +103,39 @@ pub struct Reader {
     nonce: u64,
 }
 
+/// A frame on a file transfer connection: a JSON message, or file data.
+pub enum Frame<T> {
+    Message(T),
+    Data(Vec<u8>),
+}
+
+/// The first byte of a data frame; JSON messages start with `{`.
+const DATA: u8 = 0;
+/// The most file data in one frame.
+pub const MAX_DATA: usize = MAX_PAYLOAD - 1;
+
 impl Reader {
-    pub async fn recv<T: DeserializeOwned>(&mut self) -> Result<T, Error> {
+    async fn recv_plain(&mut self) -> Result<Vec<u8>, Error> {
         let frame = read_frame(&mut self.stream).await?;
         let mut plain = vec![0u8; frame.len()];
         let n = self.state.read_message(self.nonce, &frame, &mut plain)?;
         self.nonce += 1;
-        Ok(serde_json::from_slice(&plain[..n])?)
+        plain.truncate(n);
+        Ok(plain)
+    }
+
+    pub async fn recv<T: DeserializeOwned>(&mut self) -> Result<T, Error> {
+        let plain = self.recv_plain().await?;
+        Ok(serde_json::from_slice(&plain)?)
+    }
+
+    pub async fn recv_frame<T: DeserializeOwned>(&mut self) -> Result<Frame<T>, Error> {
+        let mut plain = self.recv_plain().await?;
+        if plain.first() == Some(&DATA) {
+            plain.remove(0);
+            return Ok(Frame::Data(plain));
+        }
+        Ok(Frame::Message(serde_json::from_slice(&plain)?))
     }
 }
 
@@ -124,6 +150,18 @@ pub struct Writer {
 impl Writer {
     pub async fn send<T: Serialize>(&self, message: &T) -> Result<(), Error> {
         let json = serde_json::to_vec(message)?;
+        self.send_plain(&json).await
+    }
+
+    /// Sends file data, at most [`MAX_DATA`] bytes.
+    pub async fn send_data(&self, data: &[u8]) -> Result<(), Error> {
+        let mut plain = Vec::with_capacity(data.len() + 1);
+        plain.push(DATA);
+        plain.extend_from_slice(data);
+        self.send_plain(&plain).await
+    }
+
+    async fn send_plain(&self, json: &[u8]) -> Result<(), Error> {
         if json.len() > MAX_PAYLOAD {
             return Err(Error::Protocol("message too long".into()));
         }
@@ -132,7 +170,7 @@ impl Writer {
         // out in nonce order.
         let mut stream = self.stream.lock().await;
         let nonce = self.nonce.fetch_add(1, Ordering::SeqCst);
-        let n = self.state.write_message(nonce, &json, &mut out)?;
+        let n = self.state.write_message(nonce, json, &mut out)?;
         write_frame(&mut *stream, &out[..n]).await
     }
 

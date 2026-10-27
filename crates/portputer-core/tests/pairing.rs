@@ -41,7 +41,7 @@ fn pairs_then_reconnects_as_known() {
     let client_dir = temp("client");
     let server = start_server(&server_dir);
     let events = Arc::new(Events::default());
-    let config = || ClientConfig { store_dir: client_dir.clone(), name: "Test Phone".into(), observer: events.clone() };
+    let config = || ClientConfig { store_dir: client_dir.clone(), name: "Test Phone".into(), observer: events.clone(), local_clipboard: false };
 
     let session = Session::connect("127.0.0.1", server.port(), None, config()).unwrap();
     let info = session.info().unwrap();
@@ -90,7 +90,7 @@ fn streams_audio() {
     let client_dir = temp("audio-client");
     let server = start_server(&server_dir);
     let events = Arc::new(Events::default());
-    let config = ClientConfig { store_dir: client_dir.clone(), name: "Test Phone".into(), observer: events.clone() };
+    let config = ClientConfig { store_dir: client_dir.clone(), name: "Test Phone".into(), observer: events.clone(), local_clipboard: false };
     let session = Session::connect("127.0.0.1", server.port(), None, config).unwrap();
     let code = server.new_pairing_code();
     session.pair(&code).unwrap();
@@ -111,6 +111,67 @@ fn streams_audio() {
     assert!(session.audio_stats().is_none());
     session.close();
     for d in [server_dir, client_dir] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+#[test]
+fn transfers_files() {
+    // SAFETY: set before the server starts.
+    unsafe {
+        std::env::set_var("PORTPUTER_NO_PROMPT", "1");
+    }
+    let server_dir = temp("files-server");
+    let client_dir = temp("files-client");
+    let shared = temp("files-shared");
+    let downloads = temp("files-downloads");
+    let received = temp("files-received");
+    for d in [&shared, &downloads, &received] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    unsafe {
+        std::env::set_var("PORTPUTER_DOWNLOADS", &downloads);
+    }
+    let data: Vec<u8> = (0..300_000u32).map(|i| (i * 7 % 251) as u8).collect();
+    std::fs::write(shared.join("report.bin"), &data).unwrap();
+    std::fs::create_dir_all(shared.join("Folder")).unwrap();
+
+    let server = Server::start(ServerConfig {
+        store_dir: server_dir.clone(),
+        session: SessionKind::User,
+        port: 0,
+        name: "Test Computer".into(),
+        observer: None,
+    })
+    .unwrap();
+    let events = Arc::new(Events::default());
+    let config = ClientConfig { store_dir: client_dir.clone(), name: "Test Phone".into(), observer: events.clone(), local_clipboard: false };
+    let session = Session::connect("127.0.0.1", server.port(), None, config).unwrap();
+    assert!(session.list_files(shared.to_str().unwrap()).is_err(), "nothing before pairing");
+    session.pair(&server.new_pairing_code()).unwrap();
+    assert!(session.info().unwrap().files);
+
+    let listing = session.list_files(shared.to_str().unwrap()).unwrap();
+    let portputer_core::files::TransferReply::Listing { entries, .. } = listing else { panic!("{listing:?}") };
+    assert_eq!(entries.iter().map(|e| (e.name.as_str(), e.dir)).collect::<Vec<_>>(), vec![("Folder", true), ("report.bin", false)]);
+    assert_eq!(entries[1].size, 300_000);
+
+    let progress = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let p = progress.clone();
+    let got = session
+        .download(entries[1].path.as_str(), &received, move |done, _| p.store(done, std::sync::atomic::Ordering::Relaxed))
+        .unwrap();
+    assert_eq!(std::fs::read(&got).unwrap(), data);
+    assert_eq!(progress.load(std::sync::atomic::Ordering::Relaxed), 300_000);
+
+    let remote = session.upload(&got, Some("../sneaky.bin".into()), None, |_, _| {}).unwrap();
+    assert_eq!(std::path::Path::new(&remote), downloads.join("sneaky.bin"));
+    assert_eq!(std::fs::read(downloads.join("sneaky.bin")).unwrap(), data);
+    let again = session.upload(&got, Some("sneaky.bin".into()), None, |_, _| {}).unwrap();
+    assert_eq!(std::path::Path::new(&again), downloads.join("sneaky 2.bin"));
+
+    session.close();
+    for d in [server_dir, client_dir, shared, downloads, received] {
         let _ = std::fs::remove_dir_all(d);
     }
 }

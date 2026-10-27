@@ -4,7 +4,9 @@
 
 pub mod audio;
 pub mod client;
+pub mod clipboard;
 pub mod discovery;
+pub mod files;
 pub mod identity;
 pub mod jitter;
 pub mod keys;

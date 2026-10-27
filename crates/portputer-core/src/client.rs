@@ -55,6 +55,8 @@ pub struct ServerInfo {
     pub mute: bool,
     /// The computer offers this device's microphone to its apps.
     pub mic: bool,
+    /// Clipboard and file transfer are available.
+    pub files: bool,
     pub host: String,
     pub port: u16,
     /// Paired both ways: keys and commands are allowed.
@@ -78,6 +80,12 @@ pub enum SessionEvent {
     AudioStopped { reason: String },
     MicStarted,
     MicStopped { reason: String },
+    /// Text copied on the computer.
+    ClipboardText { text: String },
+    /// Files copied on the computer; [`Session::clipboard_files`] fetches them.
+    ClipboardFiles { files: Vec<crate::protocol::FileInfo> },
+    /// Something the client did with its own clipboard, for the person.
+    ClipboardSynced { message: String },
 }
 
 pub trait SessionObserver: Send + Sync {
@@ -89,6 +97,10 @@ pub struct ClientConfig {
     /// This device's name, as the server lists it.
     pub name: String,
     pub observer: Arc<dyn SessionObserver>,
+    /// Keeps this computer's own clipboard in step with the server's, files
+    /// included (the Mac and Windows apps). Android handles its clipboard in
+    /// the app, through the clipboard events and methods.
+    pub local_clipboard: bool,
 }
 
 enum Command {
@@ -108,6 +120,9 @@ struct Inner {
     info: Mutex<Option<ServerInfo>>,
     settings: Mutex<AudioSettings>,
     jitter: Mutex<Option<Arc<Mutex<JitterBuffer>>>>,
+    identity: Identity,
+    name: String,
+    store_dir: PathBuf,
 }
 
 /// A connection to one server, kept up until closed.
@@ -147,7 +162,7 @@ fn seen() -> &'static Mutex<HashMap<String, Vec<ServerAd>>> {
     map
 }
 
-async fn connect_once(host: &str, port: u16, expected: Option<&str>, identity: &Identity, name: &str, store: &ClientStore) -> Result<Conn, Error> {
+async fn connect_once(host: &str, port: u16, expected: Option<&str>, identity: &Identity, name: &str, store: &ClientStore, transfer: bool) -> Result<Conn, Error> {
     let addr = tokio::net::lookup_host((host, port))
         .await?
         .next()
@@ -155,7 +170,7 @@ async fn connect_once(host: &str, port: u16, expected: Option<&str>, identity: &
     let stream = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr))
         .await
         .map_err(|_| Error::Protocol(format!("{host} didn't answer")))??;
-    let hello = serde_json::to_vec(&ClientMessage::Hello { name: name.to_string(), protocol: PROTOCOL_VERSION })?;
+    let hello = serde_json::to_vec(&ClientMessage::Hello { name: name.to_string(), protocol: PROTOCOL_VERSION, transfer })?;
     let hs = tokio::time::timeout(Duration::from_secs(10), transport::initiate(stream, &identity.private, &hello))
         .await
         .map_err(|_| Error::Protocol("the handshake timed out".into()))??;
@@ -169,7 +184,7 @@ async fn connect_once(host: &str, port: u16, expected: Option<&str>, identity: &
     let welcome: ServerMessage = tokio::time::timeout(Duration::from_secs(10), reader.recv())
         .await
         .map_err(|_| Error::Protocol("no welcome from the server".into()))??;
-    let ServerMessage::Welcome { server_id, name: server_name, os, session, user, paired, version, power, audio, mute, mic } = welcome else {
+    let ServerMessage::Welcome { server_id, name: server_name, os, session, user, paired, version, power, audio, mute, mic, files } = welcome else {
         if let ServerMessage::Error { message, .. } = welcome {
             return Err(Error::Refused(message));
         }
@@ -184,7 +199,7 @@ async fn connect_once(host: &str, port: u16, expected: Option<&str>, identity: &
         writer: hs.writer,
         hash: hs.hash,
         public_key: hs.remote_static,
-        info: ServerInfo { id, name: server_name, os, session, user, version, power, audio, mute, mic, host: host.to_string(), port, trusted: pinned && paired },
+        info: ServerInfo { id, name: server_name, os, session, user, version, power, audio, mute, mic, files, host: host.to_string(), port, trusted: pinned && paired },
         peer_ip: addr.ip(),
     })
 }
@@ -196,13 +211,16 @@ impl Session {
         let store = ClientStore::new(&config.store_dir);
         let identity = store.identity()?;
         let _ = seen();
-        let conn = runtime().block_on(connect_once(host, port, expected_id.as_deref(), &identity, &config.name, &store))?;
+        let conn = runtime().block_on(connect_once(host, port, expected_id.as_deref(), &identity, &config.name, &store, false))?;
         let (tx, rx) = mpsc::unbounded_channel();
         let inner = Arc::new(Inner {
             tx,
             info: Mutex::new(Some(conn.info.clone())),
             settings: Mutex::new(AudioSettings { volume: 1.0, latency_ms: 40, mute_speakers: false }),
             jitter: Mutex::new(None),
+            identity: identity.clone(),
+            name: config.name.clone(),
+            store_dir: config.store_dir.clone(),
         });
         if conn.info.trusted {
             let _ = store.update(&conn.info.id, |s| {
@@ -220,6 +238,9 @@ impl Session {
             name: config.name,
             audio_wanted: false,
             mic_wanted: false,
+            clipboard_wanted: config.local_clipboard,
+            local_clipboard: config.local_clipboard,
+            own_clipboard: Arc::new(std::sync::atomic::AtomicI64::new(-1)),
         };
         runtime().spawn(task.run(conn, rx));
         Ok(session)
@@ -283,6 +304,51 @@ impl Session {
         self.send(ClientMessage::MicStop);
     }
 
+    /// Has the server send its clipboard as it changes, as
+    /// [`SessionEvent::ClipboardText`] and [`SessionEvent::ClipboardFiles`].
+    pub fn set_clipboard_watch(&self, on: bool) {
+        self.send(ClientMessage::ClipboardWatch { on });
+    }
+
+    /// Puts text on the server's clipboard.
+    pub fn send_clipboard_text(&self, text: &str) {
+        self.send(ClientMessage::ClipboardText { text: text.to_string() });
+    }
+
+    /// Lists a folder on the server; empty is the home folder.
+    pub fn list_files(&self, path: &str) -> Result<crate::files::TransferReply, Error> {
+        let path = path.to_string();
+        runtime().block_on(with_transfer(self.inner.clone(), move |mut t| async move { t.list(&path).await }))
+    }
+
+    /// Downloads a file from the server into `dest`, returning where it went.
+    pub fn download(&self, path: &str, dest: &std::path::Path, progress: impl Fn(u64, u64) + Send + Sync + 'static) -> Result<PathBuf, Error> {
+        let (path, dest) = (path.to_string(), dest.to_path_buf());
+        runtime().block_on(with_transfer(self.inner.clone(), move |mut t| async move { t.download(&path, &dest, &progress).await }))
+    }
+
+    /// Uploads a file to the server: to its Downloads folder, or with
+    /// `clipboard`, to its clipboard with the other files of that copy.
+    /// `name` replaces the file's own name.
+    pub fn upload(
+        &self,
+        path: &std::path::Path,
+        name: Option<String>,
+        clipboard: Option<u64>,
+        progress: impl Fn(u64, u64) + Send + Sync + 'static,
+    ) -> Result<String, Error> {
+        let path = path.to_path_buf();
+        runtime().block_on(with_transfer(self.inner.clone(), move |mut t| async move {
+            t.upload(&path, name.as_deref(), clipboard, &progress).await
+        }))
+    }
+
+    /// Fetches the files on the server's clipboard into `dest`.
+    pub fn clipboard_files(&self, dest: &std::path::Path, progress: impl Fn(u64, u64) + Send + Sync + 'static) -> Result<Vec<PathBuf>, Error> {
+        let dest = dest.to_path_buf();
+        runtime().block_on(with_transfer(self.inner.clone(), move |mut t| async move { t.clipboard_files(&dest, &progress).await }))
+    }
+
     pub fn stop_audio(&self) {
         self.send(ClientMessage::AudioStop);
     }
@@ -341,6 +407,10 @@ struct Supervisor {
     name: String,
     audio_wanted: bool,
     mic_wanted: bool,
+    clipboard_wanted: bool,
+    local_clipboard: bool,
+    /// This computer's clipboard change count after Portputer wrote it.
+    own_clipboard: Arc<std::sync::atomic::AtomicI64>,
 }
 
 enum Ended {
@@ -423,7 +493,7 @@ impl Supervisor {
                         Command::Send(_) => {}
                     }
                 }
-                let attempt = connect_once(&host, port, Some(&info.id), &self.identity, &self.name, &self.store);
+                let attempt = connect_once(&host, port, Some(&info.id), &self.identity, &self.name, &self.store, false);
                 if let Ok(Ok(conn)) = tokio::time::timeout(Duration::from_secs(8), attempt).await {
                     if conn.info.trusted {
                         let _ = self.store.update(&conn.info.id, |s| {
@@ -466,6 +536,13 @@ impl Supervisor {
         if info.trusted && self.mic_wanted {
             let _ = writer.send(&ClientMessage::MicStart).await;
         }
+        let mut local_watch: Option<tokio::task::JoinHandle<()>> = None;
+        if info.trusted && info.files && self.clipboard_wanted {
+            let _ = writer.send(&ClientMessage::ClipboardWatch { on: true }).await;
+            if self.local_clipboard {
+                local_watch = Some(tokio::spawn(watch_local_clipboard(self.inner.clone(), writer.clone(), self.own_clipboard.clone(), self.observer.clone())));
+            }
+        }
         let ended = loop {
             tokio::select! {
                 command = rx.recv() => {
@@ -490,6 +567,7 @@ impl Supervisor {
                             match &message {
                                 ClientMessage::AudioStart { .. } => self.audio_wanted = true,
                                 ClientMessage::MicStart => self.mic_wanted = true,
+                                ClientMessage::ClipboardWatch { on } => self.clipboard_wanted = *on,
                                 ClientMessage::MicStop => {
                                     self.mic_wanted = false;
                                     mic = None;
@@ -587,6 +665,25 @@ impl Supervisor {
                                 }
                             }
                         }
+                        ServerMessage::ClipboardText { text } => {
+                            if self.local_clipboard {
+                                let own = self.own_clipboard.clone();
+                                tokio::task::spawn_blocking(move || {
+                                    if crate::clipboard::write_text(&text).is_ok() {
+                                        own.store(crate::clipboard::change_count(), std::sync::atomic::Ordering::SeqCst);
+                                    }
+                                });
+                            } else {
+                                self.emit(SessionEvent::ClipboardText { text });
+                            }
+                        }
+                        ServerMessage::ClipboardFiles { files } => {
+                            if self.local_clipboard {
+                                tokio::spawn(paste_server_files(self.inner.clone(), files, self.own_clipboard.clone(), self.observer.clone()));
+                            } else {
+                                self.emit(SessionEvent::ClipboardFiles { files });
+                            }
+                        }
                         ServerMessage::MicStopped { reason } => {
                             if mic.take().is_some() {
                                 self.emit(SessionEvent::MicStopped { reason });
@@ -616,6 +713,9 @@ impl Supervisor {
         }
         if mic.take().is_some() {
             self.emit(SessionEvent::MicStopped { reason: "disconnected".into() });
+        }
+        if let Some(w) = local_watch.take() {
+            w.abort();
         }
         let had_audio = audio.take().is_some();
         *self.inner.jitter.lock().unwrap() = None;
@@ -712,4 +812,105 @@ fn start_mic_sender(server: IpAddr, port: u16, key: &str) -> Result<MicSender, E
         }
     })?;
     Ok(MicSender { _capture: capture })
+}
+
+/// Opens a transfer connection to the connected server and runs `op` on it.
+async fn with_transfer<T, F, Fut>(inner: Arc<Inner>, op: F) -> Result<T, Error>
+where
+    F: FnOnce(crate::files::TransferClient) -> Fut,
+    Fut: std::future::Future<Output = Result<T, Error>>,
+{
+    let info = inner.info.lock().unwrap().clone().ok_or(Error::Closed)?;
+    if !info.trusted {
+        return Err(Error::Refused("Not paired.".into()));
+    }
+    let store = ClientStore::new(&inner.store_dir);
+    let conn = connect_once(&info.host, info.port, Some(&info.id), &inner.identity, &inner.name, &store, true).await?;
+    if !conn.info.trusted {
+        return Err(Error::Refused("Not paired.".into()));
+    }
+    op(crate::files::TransferClient { reader: conn.reader, writer: conn.writer }).await
+}
+
+/// Where files copied on the server go on this computer before they're put
+/// on its clipboard.
+fn local_clipboard_dir() -> PathBuf {
+    crate::files::clipboard_dir(crate::identity::now_secs())
+}
+
+/// Files copied on the server, put on this computer's clipboard.
+async fn paste_server_files(
+    inner: Arc<Inner>,
+    files: Vec<crate::protocol::FileInfo>,
+    own: Arc<std::sync::atomic::AtomicI64>,
+    observer: Arc<dyn SessionObserver>,
+) {
+    let dest = local_clipboard_dir();
+    let result = with_transfer(inner, move |mut t| async move { t.clipboard_files(&dest, &|_, _| {}).await }).await;
+    let message = match result {
+        Ok(paths) if !paths.is_empty() => {
+            let refs: Vec<&std::path::Path> = paths.iter().map(PathBuf::as_path).collect();
+            match crate::clipboard::write_files(&refs) {
+                Ok(()) => {
+                    own.store(crate::clipboard::change_count(), std::sync::atomic::Ordering::SeqCst);
+                    format!("Copied {} from the computer.", count_files(files.len()))
+                }
+                Err(e) => format!("Copying files failed: {e}"),
+            }
+        }
+        Ok(_) => return,
+        Err(e) => format!("Copying files failed: {e}"),
+    };
+    observer.event(SessionEvent::ClipboardSynced { message });
+}
+
+pub fn count_files(n: usize) -> String {
+    if n == 1 { "1 file".into() } else { format!("{n} files") }
+}
+
+/// This computer's clipboard, sent to the server whenever something new is
+/// copied: text as a message, files uploaded to the server's clipboard.
+async fn watch_local_clipboard(inner: Arc<Inner>, writer: Writer, own: Arc<std::sync::atomic::AtomicI64>, observer: Arc<dyn SessionObserver>) {
+    use std::sync::atomic::Ordering;
+    let mut last = crate::clipboard::change_count();
+    let mut tick = tokio::time::interval(Duration::from_millis(500));
+    loop {
+        tick.tick().await;
+        let count = crate::clipboard::change_count();
+        if count == last {
+            continue;
+        }
+        last = count;
+        if count == own.load(Ordering::SeqCst) {
+            continue;
+        }
+        match tokio::task::spawn_blocking(crate::clipboard::read).await.ok().flatten() {
+            Some(crate::clipboard::Clip::Text(text)) => {
+                if writer.send(&ClientMessage::ClipboardText { text }).await.is_err() {
+                    return;
+                }
+            }
+            Some(crate::clipboard::Clip::Files(paths)) => {
+                let paths: Vec<PathBuf> = paths.into_iter().filter(|p| p.is_file()).collect();
+                if paths.is_empty() {
+                    continue;
+                }
+                let batch = count as u64 ^ crate::identity::now_secs();
+                let n = paths.len();
+                let result = with_transfer(inner.clone(), move |mut t| async move {
+                    for p in &paths {
+                        t.upload(p, None, Some(batch), &|_, _| {}).await?;
+                    }
+                    Ok(())
+                })
+                .await;
+                let message = match result {
+                    Ok(()) => format!("Copied {} to the computer.", count_files(n)),
+                    Err(e) => format!("Copying files failed: {e}"),
+                };
+                observer.event(SessionEvent::ClipboardSynced { message });
+            }
+            None => {}
+        }
+    }
 }
