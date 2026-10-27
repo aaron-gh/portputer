@@ -243,21 +243,27 @@ impl Session {
         let _ = seen();
         // The network first, then the relay the computer told us of.
         let relay = expected_id.as_deref().and_then(|id| store.server(id)).and_then(|s| s.relay);
-        let direct = if host.is_empty() {
-            Err(Error::Protocol("no address".into()))
-        } else {
-            runtime().block_on(connect_once(&Endpoint::Tcp(host.to_string(), port), expected_id.as_deref(), &identity, &config.name, &store, false, None))
-        };
+        // Every address it's had, at once: the one given, then those the
+        // computer told us of, such as its Tailscale address.
+        let mut addresses: Vec<(String, u16)> = vec![];
+        if !host.is_empty() {
+            addresses.push((host.to_string(), port));
+        }
+        if let Some(known) = expected_id.as_deref().and_then(|id| store.server(id)) {
+            if !known.host.is_empty() {
+                addresses.push((known.host.clone(), known.port));
+            }
+            addresses.extend(known.addresses.iter().cloned());
+        }
+        dedup_in_order(&mut addresses);
+        let direct = runtime().block_on(connect_direct(addresses, expected_id.clone(), identity.clone(), config.name.clone(), config.store_dir.clone()));
         let conn = match (direct, relay) {
             (Ok(conn), _) => conn,
             (Err(e), Some(relay)) => runtime()
                 .block_on(connect_once(&Endpoint::Relay(relay), expected_id.as_deref(), &identity, &config.name, &store, false, None))
-                .map_err(|relay_error| {
-                    if host.is_empty() {
-                        relay_error
-                    } else {
-                        Error::Refused(format!("Not on the network ({e}), and not through the relay: {relay_error}"))
-                    }
+                .map_err(|relay_error| match e {
+                    Error::Protocol(ref m) if m == "no address" => relay_error,
+                    e => Error::Refused(format!("Not reachable directly ({e}), and not through the relay: {relay_error}")),
                 })?,
             (Err(e), None) => return Err(e),
         };
@@ -533,7 +539,15 @@ impl Supervisor {
             let other = if port == crate::protocol::LOGIN_WINDOW_PORT { crate::protocol::DEFAULT_PORT } else { crate::protocol::LOGIN_WINDOW_PORT };
             out.push((host, other));
         }
-        out.dedup();
+        // The addresses the computer told us of, on both servers' ports: after
+        // a restart, the one at the login window answers.
+        if let Some(k) = &known {
+            for (h, p) in &k.addresses {
+                out.push((h.clone(), *p));
+                out.push((h.clone(), if *p == crate::protocol::LOGIN_WINDOW_PORT { crate::protocol::DEFAULT_PORT } else { crate::protocol::LOGIN_WINDOW_PORT }));
+            }
+        }
+        dedup_in_order(&mut out);
         let mut endpoints: Vec<Endpoint> = out.into_iter().map(|(h, p)| Endpoint::Tcp(h, p)).collect();
         if let Some(relay) = known.and_then(|k| k.relay) {
             endpoints.push(Endpoint::Relay(relay));
@@ -544,7 +558,10 @@ impl Supervisor {
     async fn reconnect(&mut self, info: &ServerInfo, rx: &mut mpsc::UnboundedReceiver<Command>) -> Option<Conn> {
         let started = Instant::now();
         while started.elapsed() < RECONNECT_FOR {
-            for endpoint in self.candidates(info) {
+            let (direct, relayed): (Vec<Endpoint>, Vec<Endpoint>) = self.candidates(info).into_iter().partition(|e| matches!(e, Endpoint::Tcp(..)));
+            let addresses: Vec<(String, u16)> = direct.into_iter().filter_map(|e| if let Endpoint::Tcp(h, p) = e { Some((h, p)) } else { None }).collect();
+            // Every direct address at once, then the relay.
+            for endpoint in std::iter::once(None).chain(relayed.into_iter().map(Some)) {
                 // Anything asked for meanwhile is dropped: keys typed into a
                 // computer that isn't there shouldn't arrive later.
                 while let Ok(command) = rx.try_recv() {
@@ -559,14 +576,25 @@ impl Supervisor {
                         Command::Send(_) => {}
                     }
                 }
-                let attempt = connect_once(&endpoint, Some(&info.id), &self.identity, &self.name, &self.store, false, None);
-                if let Ok(Ok(conn)) = tokio::time::timeout(Duration::from_secs(12), attempt).await {
+                let attempt = match &endpoint {
+                    None => {
+                        if addresses.is_empty() {
+                            continue;
+                        }
+                        connect_direct(addresses.clone(), Some(info.id.clone()), self.identity.clone(), self.name.clone(), self.inner.store_dir.clone()).await
+                    }
+                    Some(relay) => tokio::time::timeout(Duration::from_secs(12), connect_once(relay, Some(&info.id), &self.identity, &self.name, &self.store, false, None))
+                        .await
+                        .unwrap_or_else(|_| Err(Error::Protocol("timed out".into()))),
+                };
+                if let Ok(conn) = attempt {
                     if conn.info.trusted {
-                        if let Endpoint::Tcp(host, port) = &endpoint {
+                        if !conn.info.via_relay {
+                            let (host, port) = (conn.info.host.clone(), conn.info.port);
                             let _ = self.store.update(&conn.info.id, |s| {
                                 s.last_connected = now_secs();
-                                s.host = host.clone();
-                                s.port = *port;
+                                s.host = host;
+                                s.port = port;
                             });
                         }
                         return Some(conn);
@@ -678,6 +706,7 @@ impl Supervisor {
                                 port: info.port,
                                 macs: seen().lock().unwrap().get(&info.id).and_then(|a| a.first().map(|a| a.macs.clone())).unwrap_or_default(),
                                 last_connected: now_secs(),
+                                addresses: vec![],
                                 relay: None,
                             };
                             if let Err(e) = self.store.upsert(known) {
@@ -740,6 +769,11 @@ impl Supervisor {
                                     self.mic_wanted = false;
                                     self.emit(SessionEvent::Error { code: errors::MIC_FAILED.into(), message: e.to_string() });
                                 }
+                            }
+                        }
+                        ServerMessage::Addresses { addresses, port } => {
+                            if info.trusted {
+                                let _ = self.store.update(&info.id, |s| remember_addresses(s, &addresses, port));
                             }
                         }
                         ServerMessage::Relay { url, room, token } => {
@@ -1079,4 +1113,57 @@ async fn watch_local_clipboard(inner: Arc<Inner>, writer: Writer, own: Arc<std::
             None => {}
         }
     }
+}
+
+fn dedup_in_order<T: PartialEq + Clone>(items: &mut Vec<T>) {
+    let mut seen: Vec<T> = Vec::with_capacity(items.len());
+    items.retain(|i| {
+        if seen.contains(i) {
+            false
+        } else {
+            seen.push(i.clone());
+            true
+        }
+    });
+}
+
+/// Keeps a server's addresses from its `addresses` message, newest first.
+fn remember_addresses(server: &mut KnownServer, addresses: &[String], port: u16) {
+    let mut all: Vec<(String, u16)> = addresses.iter().map(|a| (a.clone(), port)).collect();
+    all.extend(server.addresses.drain(..));
+    dedup_in_order(&mut all);
+    all.truncate(24);
+    server.addresses = all;
+}
+
+/// Tries every address at once; the first to answer wins and the rest are
+/// stopped. Without addresses, fails with "no address".
+async fn connect_direct(addresses: Vec<(String, u16)>, expected: Option<String>, identity: Identity, name: String, store_dir: PathBuf) -> Result<Conn, Error> {
+    let mut attempts = tokio::task::JoinSet::new();
+    for (host, port) in addresses {
+        let (expected, identity, name, store_dir) = (expected.clone(), identity.clone(), name.clone(), store_dir.clone());
+        attempts.spawn(async move {
+            let store = ClientStore::new(&store_dir);
+            tokio::time::timeout(Duration::from_secs(8), connect_once(&Endpoint::Tcp(host.clone(), port), expected.as_deref(), &identity, &name, &store, false, None))
+                .await
+                .unwrap_or_else(|_| Err(Error::Protocol(format!("{host} didn't answer"))))
+        });
+    }
+    let mut last = Error::Protocol("no address".into());
+    while let Some(result) = attempts.join_next().await {
+        match result {
+            Ok(Ok(conn)) => {
+                attempts.abort_all();
+                return Ok(conn);
+            }
+            // A different computer answering is the most telling failure.
+            Ok(Err(e)) => {
+                if !matches!(last, Error::WrongServer) {
+                    last = e;
+                }
+            }
+            Err(_) => {}
+        }
+    }
+    Err(last)
 }

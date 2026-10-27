@@ -63,7 +63,17 @@ fn pairs_then_reconnects_as_known() {
 
     let again = Session::connect("127.0.0.1", server.port(), Some(server.id()), config()).unwrap();
     assert!(again.info().unwrap().trusted, "known both ways without a code");
+    // Time for the messages that follow the welcome.
+    std::thread::sleep(Duration::from_millis(300));
     again.close();
+
+    // The computer told the client every address it has, with its port, so
+    // the client finds it without being given one.
+    let known = portputer_core::client::known_servers(&client_dir);
+    assert!(known[0].addresses.iter().any(|(_, p)| *p == server.port()), "{:?}", known[0].addresses);
+    let found = Session::connect("", 0, Some(server.id()), config()).unwrap();
+    assert!(found.info().unwrap().trusted && !found.info().unwrap().via_relay);
+    found.close();
 
     // Another computer at the same address isn't taken for this one.
     let expected = server.id();
@@ -228,7 +238,16 @@ fn through_relay() {
     local.close();
     std::thread::sleep(Duration::from_millis(200));
 
-    // No usable address: only the relay.
+    // No usable address: only the relay. The client forgets every address
+    // the computer told it of.
+    let file = client_dir.join("client.json");
+    let mut json: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    for server in json["servers"].as_array_mut().unwrap() {
+        server["addresses"] = serde_json::json!([]);
+        server["host"] = serde_json::json!("127.0.0.1");
+        server["port"] = serde_json::json!(1);
+    }
+    std::fs::write(&file, serde_json::to_vec(&json).unwrap()).unwrap();
     let relayed = Session::connect("127.0.0.1", 1, Some(server.id()), config()).unwrap();
     let info = relayed.info().unwrap();
     assert!(info.via_relay && info.trusted, "{info:?}");

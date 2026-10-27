@@ -73,6 +73,8 @@ struct Shared {
     /// The paired clients' relay token hashes, which the relay is kept up
     /// to date with.
     relay_allowed: tokio::sync::watch::Sender<Vec<String>>,
+    /// The port this server listens on.
+    port: u16,
     /// The clipboard's change count after Portputer last wrote it, so that
     /// isn't sent back.
     own_clipboard: std::sync::atomic::AtomicI64,
@@ -152,6 +154,7 @@ impl Server {
             mic_inputs: Default::default(),
             relay_task: Mutex::new(None),
             relay_allowed: tokio::sync::watch::Sender::new(Vec::new()),
+            port,
             own_clipboard: std::sync::atomic::AtomicI64::new(-1),
         });
         // PORTPUTER_NO_PROMPT keeps tests from asking for permission.
@@ -415,6 +418,7 @@ async fn serve(shared: Arc<Shared>, stream: transport::BoxStream, address: Optio
         if let Some(message) = shared.relay_message(&client_key) {
             writer.send(&message).await?;
         }
+        writer.send(&ServerMessage::Addresses { addresses: own_addresses(), port: shared.port }).await?;
     }
     if paired && !platform::input_allowed(false) {
         writer.send(&input_notice()).await?;
@@ -459,6 +463,7 @@ async fn serve(shared: Arc<Shared>, stream: transport::BoxStream, address: Optio
                             if let Some(message) = shared.relay_message(&client_key) {
                                 writer.send(&message).await?;
                             }
+                            writer.send(&ServerMessage::Addresses { addresses: own_addresses(), port: shared.port }).await?;
                             if !platform::input_allowed(false) {
                                 writer.send(&input_notice()).await?;
                             }
@@ -605,6 +610,27 @@ fn input_notice() -> ServerMessage {
         "Portputer can't type on this computer."
     };
     ServerMessage::Notice { code: notices::INPUT_PERMISSION.into(), message: message.into() }
+}
+
+/// This computer's addresses on every network it's on: the local network's,
+/// and VPNs' such as Tailscale's. Link-local addresses need a scope or are
+/// meaningless elsewhere, so they're left out.
+fn own_addresses() -> Vec<String> {
+    let mut out: Vec<String> = if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|i| !i.is_loopback())
+        .map(|i| i.ip())
+        .filter(|ip| match ip {
+            std::net::IpAddr::V4(v4) => !v4.is_link_local(),
+            std::net::IpAddr::V6(v6) => !v6.is_unicast_link_local(),
+        })
+        .map(|ip| ip.to_string())
+        .collect();
+    out.sort_by_key(|a| a.contains(':'));
+    out.dedup();
+    out.truncate(16);
+    out
 }
 
 /// Clipboard and files, for a logged-in user only: the server at the login

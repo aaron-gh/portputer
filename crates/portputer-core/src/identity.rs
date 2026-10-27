@@ -251,6 +251,10 @@ pub struct KnownServer {
     pub macs: Vec<String>,
     #[serde(default)]
     pub last_connected: u64,
+    /// Every address the server said it has, with its port: tried, all at
+    /// once, when discovery doesn't find it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addresses: Vec<(String, u16)>,
     /// The server's room at the internet relay and this client's token there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relay: Option<crate::relay::RelayAccess>,

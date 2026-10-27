@@ -53,6 +53,7 @@ A man in the middle has a different `h` with each side, so can't produce either 
 | `mic_ready` | `port` (UDP), `key` (hex, 32 bytes) |
 | `mic_stopped` | `reason` |
 | `relay` | `url`, `room`, `token`: the server's room at the internet relay and this client's token there; sent to paired clients only |
+| `addresses` | `addresses`, `port`: every address the server has (local network, Tailscale and other VPNs); sent to paired clients only |
 | `clipboard_text` | `text` copied on the server (up to 60,000 bytes) |
 | `clipboard_files` | `files`: `name` and `size` of each file copied on the server |
 | `pong` | `n` |
@@ -80,7 +81,7 @@ The speakers are muted while any client streaming audio asks for it, and unmuted
 
 Keys are W3C `KeyboardEvent.code` values: the physical key, not the character. The server's system applies its own keyboard layout. `crates/portputer-core/src/keys.rs` maps each code to Linux input codes (Android scan codes), Android key codes, macOS virtual key codes and Windows scan codes or virtual keys. Codes Portputer adds: `Fn`, `BrightnessUp`, `BrightnessDown`, `KeyboardBacklightUp`, `KeyboardBacklightDown`, `MissionControl`, `Launchpad`, `Eject`.
 
-The server releases every key a client holds when it disconnects. The client reconnects for up to 20 minutes after an unexpected disconnect, to the server's current announcement (user session first, then login window) or its last address, and drops key events while disconnected.
+The server releases every key a client holds when it disconnects. A client connecting to a paired server tries, all at once, the address it was given, the last one that worked and every address from `addresses`; the first to answer wins. Only if none does, it uses the relay. The client reconnects for up to 20 minutes after an unexpected disconnect, to the server's current announcement (user session first, then login window) or its last address, and drops key events while disconnected.
 
 ## Audio
 

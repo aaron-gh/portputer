@@ -139,6 +139,10 @@ pub enum ServerMessage {
     /// there, for when the server isn't on the client's network. Sent to
     /// paired clients only.
     Relay { url: String, room: String, token: String },
+    /// Every address the server can be reached at, such as a Tailscale or
+    /// other VPN address besides the local network's, for when discovery
+    /// can't find it. Sent to paired clients only.
+    Addresses { addresses: Vec<String>, port: u16 },
     /// Text copied on the server.
     ClipboardText { text: String },
     /// Files copied on the server; fetched over a transfer connection.
