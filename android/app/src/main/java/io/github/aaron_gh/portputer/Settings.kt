@@ -6,6 +6,7 @@ import android.view.KeyEvent
 
 /** The key combination that switches the keyboard between the computer and this device. */
 enum class ReleaseShortcut(val label: Int) {
+    CTRL_META_ESC(R.string.release_ctrl_meta_esc),
     CTRL_ALT_SHIFT_ESC(R.string.release_ctrl_alt_shift_esc),
     META_ESC(R.string.release_meta_esc),
     CTRL_SHIFT_F12(R.string.release_ctrl_shift_f12),
@@ -13,6 +14,7 @@ enum class ReleaseShortcut(val label: Int) {
     PAUSE(R.string.release_pause);
 
     fun matches(e: KeyEvent): Boolean = when (this) {
+        CTRL_META_ESC -> e.keyCode == KeyEvent.KEYCODE_ESCAPE && e.isCtrlPressed && e.isMetaPressed
         CTRL_ALT_SHIFT_ESC -> e.keyCode == KeyEvent.KEYCODE_ESCAPE && e.isCtrlPressed && e.isAltPressed && e.isShiftPressed
         META_ESC -> e.keyCode == KeyEvent.KEYCODE_ESCAPE && e.isMetaPressed
         CTRL_SHIFT_F12 -> e.keyCode == KeyEvent.KEYCODE_F12 && e.isCtrlPressed && e.isShiftPressed
@@ -34,7 +36,7 @@ class Settings(context: Context) {
         set(value) = prefs.edit().putBoolean("by_position", value).apply()
 
     var release: ReleaseShortcut
-        get() = runCatching { ReleaseShortcut.valueOf(prefs.getString("release", "")!!) }.getOrDefault(ReleaseShortcut.CTRL_ALT_SHIFT_ESC)
+        get() = runCatching { ReleaseShortcut.valueOf(prefs.getString("release", "")!!) }.getOrDefault(ReleaseShortcut.CTRL_META_ESC)
         set(value) = prefs.edit().putString("release", value.name).apply()
 
     var bufferMs: Int

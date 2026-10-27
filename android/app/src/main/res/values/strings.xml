@@ -128,6 +128,7 @@
     <string name="settings_builtin_help">For devices with a hardware keyboard. The device\'s own buttons, such as volume, always stay on the device.</string>
     <string name="settings_haptics">Vibrate when the keyboard switches</string>
 
+    <string name="release_ctrl_meta_esc">Control-Meta-Escape (Meta is the Windows or Command key)</string>
     <string name="release_ctrl_alt_shift_esc">Control-Alt-Shift-Escape</string>
     <string name="release_meta_esc">Meta-Escape</string>
     <string name="release_ctrl_shift_f12">Control-Shift-F12</string>
