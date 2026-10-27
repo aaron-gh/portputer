@@ -76,13 +76,13 @@ Everything works through either route: keys, audio, the microphone, the clipboar
 
 Portputer checks for updates by itself and offers to install them:
 
-- **Mac:** once a day, through Sparkle. Check for Updates is in the menu bar menu and in Settings, About. After an update, if login window support or the microphone driver is from the older version, Settings shows Update… beside it.
-- **Windows:** through WinSparkle. Check for Updates is in the window and the notification area menu. The installer runs quietly and starts Portputer again.
+- **Mac:** once a day. Check for Updates is in the menu bar menu and in Settings, About. After an update, if login window support or the microphone driver is from the older version, Settings shows Update… beside it.
+- **Windows:** once a day. Check for Updates is in the window and the notification area menu. Portputer starts again after the update installs.
 - **Android:** once a day, when Portputer opens. Check for Updates is in Settings. Android asks once for permission to install Portputer's updates, and to confirm each one.
 
 Updates are signed, and each app checks the signature before installing.
 
-## Telling us about a problem
+## Telling me about a problem
 
 Include the version: on the phone, Settings, at the bottom; on a Mac, the menu bar menu or Settings, About; on Windows, the window title.
 
@@ -103,16 +103,6 @@ Include the version: on the phone, Settings, at the bottom; on a Mac, the menu b
 - Android: `android/gradlew -p android :app:assembleDebug`. Needs Rust's `aarch64-linux-android` and `x86_64-linux-android` targets and the Android NDK.
 - Windows, built on a Mac: `windows/build.sh`. Needs MinGW-w64 (`brew install mingw-w64`).
 - Tests: `cargo test -p portputer-core`.
-
-### Releasing
-
-Each script builds its app, signs it, and adds it to an update feed at the top of the repository (`appcast.xml`, `appcast-windows.xml`, `appcast-android.json`). Then attach the files in the `dist` folders to a GitHub release named `v<version>`, and commit and push the feeds. Set the version in `Cargo.toml`; the build number is the number of commits, so commit before releasing.
-
-- `macos/release.sh [notes.html]`: `macos/dist/Portputer-<version>.dmg`
-- `windows/release.sh [notes.html]`: `windows/dist/Portputer-<version>-windows-x64-setup.exe` (needs `brew install makensis`)
-- `android/release.sh [notes.txt]`: `android/dist/Portputer-<version>.apk`
-
-The Mac and Windows updates are signed with an Ed25519 key in the login Keychain (account "portputer", made by Sparkle's `generate_keys --account portputer`); its public half is `macos/Support/sparkle-public-key.txt`. The Android app is signed with `~/.android/portputer.keystore`, whose password is in the login Keychain as "Portputer Android signing key" (`android/make-signing-key.sh`). Keep backups of both: installed copies accept only updates signed with them.
 
 ## Licence
 
