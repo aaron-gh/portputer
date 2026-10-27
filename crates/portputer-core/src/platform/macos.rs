@@ -201,27 +201,46 @@ pub fn input_permission_detail() -> String {
 /// Whether posted keys reach macOS here, for the log at the login window:
 /// Shift goes down and up (it types nothing), and the HID system's state is
 /// read while it's down. Also whether this process has a window server
-/// session, which posting needs.
+/// session, which posting needs. Each step is logged; a step that doesn't
+/// return within 3 seconds is sampled to /Library/Logs/Portputer.
 pub fn posting_probe() -> String {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU8, Ordering};
+
     const SHIFT: u16 = 56;
-    let session = objc2_core_graphics::CGSessionCopyCurrentDictionary().is_some();
-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState);
-    let post = |down: bool| {
-        if let Some(event) = CGEvent::new_keyboard_event(source.as_deref(), SHIFT, down) {
-            CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
+    const STEPS: [&str; 5] = ["window server session", "event source", "Shift down", "HID state", "Shift up"];
+    let step = Arc::new(AtomicU8::new(0));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let at = step.clone();
+    std::thread::spawn(move || {
+        at.store(0, Ordering::SeqCst);
+        let session = objc2_core_graphics::CGSessionCopyCurrentDictionary().is_some();
+        at.store(1, Ordering::SeqCst);
+        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState);
+        let post = |down: bool| {
+            if let Some(event) = CGEvent::new_keyboard_event(source.as_deref(), SHIFT, down) {
+                CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
+            }
+        };
+        at.store(2, Ordering::SeqCst);
+        post(true);
+        std::thread::sleep(Duration::from_millis(100));
+        at.store(3, Ordering::SeqCst);
+        let hid = CGEventSource::key_state(CGEventSourceStateID::HIDSystemState, SHIFT);
+        let combined = CGEventSource::key_state(CGEventSourceStateID::CombinedSessionState, SHIFT);
+        at.store(4, Ordering::SeqCst);
+        post(false);
+        let _ = tx.send(format!("window server session={session}; while Shift was posted down: HID state={hid}, session state={combined}"));
+    });
+    match rx.recv_timeout(Duration::from_secs(3)) {
+        Ok(result) => format!("posting probe: {result}"),
+        Err(_) => {
+            let stuck = STEPS[step.load(Ordering::SeqCst) as usize];
+            let file = "/Library/Logs/Portputer/posting-probe-sample.txt";
+            let _ = std::process::Command::new("/usr/bin/sample").args([&std::process::id().to_string(), "2", "-file", file]).output();
+            format!("posting probe: stuck at \"{stuck}\" for 3 seconds; sample in {file}")
         }
-    };
-    let before = CGEventSource::key_state(CGEventSourceStateID::HIDSystemState, SHIFT);
-    post(true);
-    std::thread::sleep(Duration::from_millis(100));
-    let hid = CGEventSource::key_state(CGEventSourceStateID::HIDSystemState, SHIFT);
-    let combined = CGEventSource::key_state(CGEventSourceStateID::CombinedSessionState, SHIFT);
-    post(false);
-    std::thread::sleep(Duration::from_millis(100));
-    let after = CGEventSource::key_state(CGEventSourceStateID::HIDSystemState, SHIFT);
-    format!(
-        "posting probe: window server session={session}; Shift before={before}, while posted down: HID state={hid} session state={combined}, after up={after}"
-    )
+    }
 }
 
 pub fn is_root() -> bool {
