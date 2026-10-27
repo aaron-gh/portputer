@@ -823,6 +823,15 @@ pub mod loopback {
         Ok(())
     }
 
+    /// The outputs as they were, for putting back after a server that was
+    /// stopped before it could: their UIDs, one per line.
+    const SAVED_OUTPUTS: &str = "/var/run/portputer-outputs";
+
+    fn save(routing: &Routing) {
+        let uid = |d| uid_of(d).map(|u| u.to_string()).unwrap_or_default();
+        let _ = std::fs::write(SAVED_OUTPUTS, format!("{}\n{}\n", uid(routing.previous), uid(routing.previous_system)));
+    }
+
     fn restore() {
         if let Some(routing) = ROUTING.lock().unwrap().take() {
             set_device(kAudioHardwarePropertyDefaultOutputDevice, routing.previous);
@@ -830,7 +839,50 @@ pub mod loopback {
             if let Some(a) = routing.aggregate {
                 unsafe { AudioHardwareDestroyAggregateDevice(a) };
             }
+            let _ = std::fs::remove_file(SAVED_OUTPUTS);
         }
+    }
+
+    /// Puts the outputs back now, when the server stops.
+    pub fn stop() {
+        restore();
+    }
+
+    /// After a login window server that stopped without putting the outputs
+    /// back: outputs left on Portputer Speakers or the multi-output device go
+    /// back to those saved (or the system output to the default output),
+    /// and the multi-output device is removed. For the user's session.
+    pub fn recover() -> bool {
+        let ours: Vec<AudioObjectID> = [MULTI_OUTPUT_UID, SPEAKERS_UID].iter().filter_map(|u| super::feed::device_for(u)).collect();
+        let saved: Vec<Option<AudioObjectID>> = std::fs::read_to_string(SAVED_OUTPUTS)
+            .unwrap_or_default()
+            .lines()
+            .map(|uid| super::feed::device_for(uid).filter(|d| !ours.contains(d)))
+            .collect();
+        let mut changed = false;
+        let output = get_device(kAudioHardwarePropertyDefaultOutputDevice);
+        if ours.contains(&output) {
+            if let Some(Some(previous)) = saved.first() {
+                set_device(kAudioHardwarePropertyDefaultOutputDevice, *previous);
+                changed = true;
+            }
+        }
+        let output = get_device(kAudioHardwarePropertyDefaultOutputDevice);
+        if ours.contains(&get_device(kAudioHardwarePropertyDefaultSystemOutputDevice)) {
+            let system = saved.get(1).copied().flatten().unwrap_or(output);
+            if !ours.contains(&system) {
+                set_device(kAudioHardwarePropertyDefaultSystemOutputDevice, system);
+                changed = true;
+            }
+        }
+        if let Some(aggregate) = super::feed::device_for(MULTI_OUTPUT_UID) {
+            let busy = [kAudioHardwarePropertyDefaultOutputDevice, kAudioHardwarePropertyDefaultSystemOutputDevice].iter().any(|s| get_device(*s) == aggregate);
+            if !busy {
+                unsafe { AudioHardwareDestroyAggregateDevice(aggregate) };
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Mute Computer Speakers while listening at the login window.
@@ -897,6 +949,7 @@ pub mod loopback {
             }
             return Err(Error::Audio(e));
         }
+        save(&routing);
         *ROUTING.lock().unwrap() = Some(routing);
         let rate = rate_of(speakers).max(1.0) as u32;
         let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();

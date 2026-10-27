@@ -73,6 +73,25 @@ fn serve(args: &[String]) {
             _ => usage(),
         }
     }
+    // At the login window, launchd stops the server with SIGTERM when someone
+    // logs in: the outputs it routed through Portputer Speakers go back first.
+    // SIGTERM is blocked before any thread starts and waited for on one.
+    #[cfg(target_os = "macos")]
+    if login_window {
+        unsafe {
+            let mut set: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut set);
+            libc::sigaddset(&mut set, libc::SIGTERM);
+            libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+            std::thread::spawn(move || {
+                let mut signal = 0;
+                libc::sigwait(&set, &mut signal);
+                portputer_core::audio::loopback::stop();
+                tracing::info!("stopped");
+                std::process::exit(0);
+            });
+        }
+    }
     let session = if login_window { SessionKind::LoginWindow } else { SessionKind::User };
     let store_dir = store.unwrap_or_else(|| default_store(login_window));
     let port = port.unwrap_or(if login_window { LOGIN_WINDOW_PORT } else { DEFAULT_PORT });
@@ -114,6 +133,8 @@ fn main() {
         Some("uninstall-driver") => install::uninstall_driver(),
         #[cfg(target_os = "macos")]
         Some("probe-audio") => println!("{}", portputer_core::audio::feed::probe()),
+        #[cfg(target_os = "macos")]
+        Some("restore-outputs") => println!("{}", if portputer_core::audio::loopback::recover() { "Outputs put back." } else { "Nothing to put back." }),
         #[cfg(target_os = "macos")]
         Some("test-speakers") => match portputer_core::audio::loopback::test() {
             Ok(m) => println!("{m}"),

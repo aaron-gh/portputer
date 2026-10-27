@@ -123,7 +123,13 @@ pub struct Server {
 impl Server {
     pub fn start(config: ServerConfig) -> Result<Server, Error> {
         #[cfg(target_os = "macos")]
-        audio::loopback::use_for_capture(config.session == SessionKind::LoginWindow);
+        {
+            audio::loopback::use_for_capture(config.session == SessionKind::LoginWindow);
+            // Outputs the login window's server left routed through Portputer.
+            if config.session == SessionKind::User && audio::loopback::recover() {
+                tracing::info!("put back the outputs the login window's server had changed");
+            }
+        }
         let store = ServerStore::new(&config.store_dir);
         let identity = store.identity()?;
         let runtime = tokio::runtime::Builder::new_multi_thread()
