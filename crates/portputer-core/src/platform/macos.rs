@@ -200,34 +200,6 @@ pub const STRATEGIES: [Strategy; 6] = [
     Strategy { name: "no source, HID tap", source: None, tap: CGEventTapLocation::HIDEventTap },
 ];
 
-/// Whether a strategy's keys register here: Shift goes down, the HID and
-/// session states are read, and Shift goes up.
-pub fn probe_strategy(index: usize) -> String {
-    let Some(strategy) = STRATEGIES.get(index) else { return "no such strategy".into() };
-    let mut injector = MacInjector::with_strategy(SessionKind::LoginWindow, strategy);
-    injector.post_code("ShiftLeft", 56, true);
-    std::thread::sleep(Duration::from_millis(60));
-    let hid = CGEventSource::key_state(CGEventSourceStateID::HIDSystemState, 56);
-    let session = CGEventSource::key_state(CGEventSourceStateID::CombinedSessionState, 56);
-    injector.post_code("ShiftLeft", 56, false);
-    format!("hid={hid} session={session}")
-}
-
-/// Whether keys through IOKit's HID system register here: Shift goes down,
-/// the HID state is read, and Shift goes up. (Not for the login window,
-/// where reading the state hangs.)
-pub fn probe_hid() -> String {
-    let mut injector = match super::hid::HidInjector::open() {
-        Ok(i) => i,
-        Err(e) => return e,
-    };
-    injector.key("ShiftLeft", true);
-    std::thread::sleep(Duration::from_millis(60));
-    let hid = CGEventSource::key_state(CGEventSourceStateID::HIDSystemState, 56);
-    injector.key("ShiftLeft", false);
-    format!("hid={hid}")
-}
-
 /// A key command for the key process at the login window, one JSON line
 /// each; it answers each with a line once it's done.
 #[derive(Serialize, Deserialize, Debug)]
@@ -420,51 +392,6 @@ pub fn input_allowed(ask: bool) -> bool {
 /// the login window, the server itself leaves SkyLight alone.)
 pub fn input_permission_detail() -> String {
     format!("accessibility={} post_event={} uid={}", unsafe { AXIsProcessTrusted() }, CGPreflightPostEventAccess(), unsafe { libc::geteuid() })
-}
-
-/// Whether posted keys reach macOS here, for the log at the login window:
-/// Shift goes down and up (it types nothing), and the HID system's state is
-/// read while it's down. Also whether this process has a window server
-/// session, which posting needs. Each step is logged; a step that doesn't
-/// return within 3 seconds is sampled to /Library/Logs/Portputer.
-pub fn posting_probe() -> String {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicU8, Ordering};
-
-    const SHIFT: u16 = 56;
-    const STEPS: [&str; 5] = ["window server session", "event source", "Shift down", "HID state", "Shift up"];
-    let step = Arc::new(AtomicU8::new(0));
-    let (tx, rx) = std::sync::mpsc::channel();
-    let at = step.clone();
-    std::thread::spawn(move || {
-        at.store(0, Ordering::SeqCst);
-        let session = objc2_core_graphics::CGSessionCopyCurrentDictionary().is_some();
-        at.store(1, Ordering::SeqCst);
-        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState);
-        let post = |down: bool| {
-            if let Some(event) = CGEvent::new_keyboard_event(source.as_deref(), SHIFT, down) {
-                CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
-            }
-        };
-        at.store(2, Ordering::SeqCst);
-        post(true);
-        std::thread::sleep(Duration::from_millis(100));
-        at.store(3, Ordering::SeqCst);
-        let hid = CGEventSource::key_state(CGEventSourceStateID::HIDSystemState, SHIFT);
-        let combined = CGEventSource::key_state(CGEventSourceStateID::CombinedSessionState, SHIFT);
-        at.store(4, Ordering::SeqCst);
-        post(false);
-        let _ = tx.send(format!("window server session={session}; while Shift was posted down: HID state={hid}, session state={combined}"));
-    });
-    match rx.recv_timeout(Duration::from_secs(3)) {
-        Ok(result) => format!("posting probe: {result}"),
-        Err(_) => {
-            let stuck = STEPS[step.load(Ordering::SeqCst) as usize];
-            let file = "/Library/Logs/Portputer/posting-probe-sample.txt";
-            let _ = std::process::Command::new("/usr/bin/sample").args([&std::process::id().to_string(), "2", "-file", file]).output();
-            format!("posting probe: stuck at \"{stuck}\" for 3 seconds; sample in {file}")
-        }
-    }
 }
 
 pub fn is_root() -> bool {

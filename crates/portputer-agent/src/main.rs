@@ -134,19 +134,10 @@ fn main() {
         #[cfg(target_os = "macos")]
         Some("uninstall-driver") => install::uninstall_driver(),
         #[cfg(target_os = "macos")]
-        Some("probe-audio") => println!("{}", portputer_core::audio::feed::probe()),
-        #[cfg(target_os = "macos")]
         Some("inject") => {
-            let number = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok());
-            match number("--probe") {
-                Some(n) => println!("{}", portputer_core::platform::macos::probe_strategy(n)),
-                None => portputer_core::platform::macos::run_injector(number("--strategy").unwrap_or(0)),
-            }
+            let strategy = args.iter().position(|a| a == "--strategy").and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok());
+            portputer_core::platform::macos::run_injector(strategy.unwrap_or(portputer_core::platform::macos::HID_STRATEGY));
         }
-        #[cfg(target_os = "macos")]
-        Some("hid-probe") => println!("{}", portputer_core::platform::macos::probe_hid()),
-        #[cfg(target_os = "macos")]
-        Some("posting-probe") => println!("{}", portputer_core::platform::macos::posting_probe()),
         #[cfg(target_os = "macos")]
         Some("restore-outputs") => println!("{}", if portputer_core::audio::loopback::recover() { "Outputs put back." } else { "Nothing to put back." }),
         #[cfg(target_os = "macos")]
