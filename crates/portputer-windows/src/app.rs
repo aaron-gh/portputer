@@ -120,6 +120,7 @@ struct Computer {
     os: Os,
     known: Option<KnownServer>,
     ads: Vec<ServerAd>,
+    reach: Option<portputer_core::client::Reachability>,
 }
 
 impl Computer {
@@ -147,8 +148,14 @@ impl Computer {
             Some(a) if a.session == SessionKind::LoginWindow => "at the login window".to_string(),
             Some(a) if !a.user.is_empty() => format!("{} logged in", a.user),
             Some(_) => "available".to_string(),
-            None if self.known.as_ref().is_some_and(|k| k.relay.is_some()) => "through the internet relay".to_string(),
-            None => "not on the network".to_string(),
+            None if self.known.is_some() => match &self.reach {
+                None => "checking".to_string(),
+                Some(portputer_core::client::Reachability::Direct { tailscale: true, .. }) => "available through Tailscale".to_string(),
+                Some(portputer_core::client::Reachability::Direct { .. }) => "available on another network".to_string(),
+                Some(portputer_core::client::Reachability::Relay) => "available through the internet relay".to_string(),
+                Some(portputer_core::client::Reachability::NotReachable) => "not reachable".to_string(),
+            },
+            None => "not reachable".to_string(),
         };
         let paired = if self.known.is_some() { "" } else { ", not paired" };
         format!("{}, {os}, {state}{paired}", self.name)
@@ -169,6 +176,8 @@ struct App {
     capturing: bool,
     audio_wanted: bool,
     menu_keys: Vec<keys::MenuKey>,
+    reach: HashMap<String, portputer_core::client::Reachability>,
+    probing: bool,
 }
 
 thread_local! {
@@ -417,12 +426,38 @@ impl App {
                     Some("windows") => Os::Windows,
                     _ => Os::Other,
                 });
-                Computer { id, name, os, known: k, ads }
+                let reach = self.reach.get(&id).cloned();
+                Computer { id, name, os, known: k, ads, reach }
             })
             .collect();
         self.computers.sort_by_key(|c| (c.known.is_none(), c.name.to_lowercase()));
         let lines: Vec<String> = self.computers.iter().map(Computer::line).collect();
         ui::list_set(self.c.computers, &if lines.is_empty() { vec!["No computers found.".to_string()] } else { lines });
+    }
+
+    /// Checks the paired computers discovery doesn't see on this network.
+    fn probe(&mut self) {
+        if self.probing || self.conn != Conn::Idle {
+            return;
+        }
+        let ids: Vec<String> = self.computers.iter().filter(|c| c.known.is_some() && c.ads.is_empty()).map(|c| c.id.clone()).collect();
+        if ids.is_empty() {
+            return;
+        }
+        self.probing = true;
+        std::thread::spawn(move || {
+            let results: Vec<(String, portputer_core::client::Reachability)> =
+                ids.into_iter().map(|id| { let r = portputer_core::client::probe(&client_dir(), &id); (id, r) }).collect();
+            ui::run_on_ui(move || {
+                with_app(|a| {
+                    a.probing = false;
+                    a.reach.extend(results);
+                    if a.conn == Conn::Idle {
+                        a.refresh_computers();
+                    }
+                });
+            });
+        });
     }
 
     fn say(&self, text: &str) {
@@ -981,6 +1016,10 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             with_app(|a| a.layout());
             Some(LRESULT(0))
         }
+        WM_TIMER => {
+            with_app(|a| a.probe());
+            Some(LRESULT(0))
+        }
         ui::WM_TRAY => {
             match (lparam.0 & 0xFFFF) as u32 {
                 WM_LBUTTONUP | WM_LBUTTONDBLCLK | 0x400 | 0x401 => show_window(hwnd),
@@ -1099,6 +1138,8 @@ pub fn run() {
                 capturing: false,
                 audio_wanted: false,
                 menu_keys: vec![],
+                reach: HashMap::new(),
+                probing: false,
             })
         });
         with_app(|a| {
@@ -1109,6 +1150,9 @@ pub fn run() {
             let _ = &a.browser;
         });
         tray(hwnd, true);
+        // Paired computers away from this network are checked every 15 seconds.
+        SetTimer(Some(hwnd), 1, 15_000, None);
+        with_app(|a| a.probe());
         if !background {
             show_window(hwnd);
         }

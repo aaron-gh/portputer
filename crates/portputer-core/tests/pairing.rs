@@ -238,16 +238,21 @@ fn through_relay() {
     local.close();
     std::thread::sleep(Duration::from_millis(200));
 
+    // Reachable directly while it still knows the addresses.
+    assert!(matches!(portputer_core::client::probe(&client_dir, &server.id()), portputer_core::client::Reachability::Direct { .. }));
     // No usable address: only the relay. The client forgets every address
     // the computer told it of.
-    let file = client_dir.join("client.json");
-    let mut json: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-    for server in json["servers"].as_array_mut().unwrap() {
-        server["addresses"] = serde_json::json!([]);
-        server["host"] = serde_json::json!("127.0.0.1");
-        server["port"] = serde_json::json!(1);
-    }
-    std::fs::write(&file, serde_json::to_vec(&json).unwrap()).unwrap();
+    let forget_addresses = || {
+        let file = client_dir.join("client.json");
+        let mut json: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        for server in json["servers"].as_array_mut().unwrap() {
+            server["addresses"] = serde_json::json!([]);
+            server["host"] = serde_json::json!("127.0.0.1");
+            server["port"] = serde_json::json!(1);
+        }
+        std::fs::write(&file, serde_json::to_vec(&json).unwrap()).unwrap();
+    };
+    forget_addresses();
     let relayed = Session::connect("127.0.0.1", 1, Some(server.id()), config()).unwrap();
     let info = relayed.info().unwrap();
     assert!(info.via_relay && info.trusted, "{info:?}");
@@ -269,12 +274,19 @@ fn through_relay() {
     let refused = rt.block_on(portputer_core::relay::connect(&stranger));
     assert!(matches!(refused, Err(portputer_core::Error::Refused(_))), "made-up token refused");
 
+    // Without its addresses (which it told the client again through the
+    // relay), the relay says it's there.
+    forget_addresses();
+    assert_eq!(portputer_core::client::probe(&client_dir, &server.id()), portputer_core::client::Reachability::Relay);
+
     // Unpaired: the relay stops letting this device in.
     let client_id = server.paired()[0].id.clone();
     server.unpair(&client_id).unwrap();
     std::thread::sleep(Duration::from_millis(500));
     let unpaired = rt.block_on(portputer_core::relay::connect(known[0].relay.as_ref().unwrap()));
     assert!(matches!(unpaired, Err(portputer_core::Error::Refused(_))), "unpaired device refused");
+    // And the relay won't tell it whether the computer is there.
+    assert_eq!(portputer_core::client::probe(&client_dir, &server.id()), portputer_core::client::Reachability::NotReachable);
     for d in [server_dir, client_dir] {
         let _ = std::fs::remove_dir_all(d);
     }

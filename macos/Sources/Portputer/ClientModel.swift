@@ -21,6 +21,7 @@ final class ClientModel: ObservableObject {
         var os: String
         var known: KnownServer?
         var ads: [Advertisement]
+        var reach: Reachability?
 
         var userAd: Advertisement? { ads.first { $0.session == .user } }
         var loginAd: Advertisement? { ads.first { $0.session == .loginWindow } }
@@ -32,10 +33,15 @@ final class ClientModel: ObservableObject {
                 parts.append(ad.user.isEmpty ? "available" : "\(ad.user) logged in")
             } else if loginAd != nil {
                 parts.append("at the login window")
-            } else if known?.hasRelay == true {
-                parts.append("through the internet relay")
+            } else if known != nil {
+                switch reach {
+                case .none: parts.append("checking")
+                case .direct(_, let tailscale)?: parts.append(tailscale ? "available through Tailscale" : "available on another network")
+                case .relay?: parts.append("available through the internet relay")
+                case .notReachable?: parts.append("not reachable")
+                }
             } else {
-                parts.append("not on the network")
+                parts.append("not reachable")
             }
             if known == nil { parts.append("not paired") }
             return parts.joined(separator: ", ")
@@ -66,6 +72,9 @@ final class ClientModel: ObservableObject {
 
     private var session: ClientSession?
     private var discovery: Discovery?
+    private var reach: [String: Reachability] = [:]
+    private var probeTimer: Timer?
+    private var probing = false
     private var ads: [String: Advertisement] = [:]
     private var generation = 0
 
@@ -89,11 +98,35 @@ final class ClientModel: ObservableObject {
         ads = [:]
         discovery = try? Discovery.start(listener: Browse())
         refresh()
+        probe()
+        probeTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { _ in
+            Task { @MainActor in ClientModel.shared.probe() }
+        }
+    }
+
+    /// Checks the paired computers discovery doesn't see on this network.
+    func probe() {
+        guard !probing else { return }
+        let ids = computers.filter { $0.known != nil && $0.ads.isEmpty && $0.id != info?.id }.map(\.id)
+        guard !ids.isEmpty else { return }
+        probing = true
+        let store = storeDir
+        DispatchQueue.global().async {
+            let results = Dictionary(uniqueKeysWithValues: ids.map { ($0, probeComputer(storeDir: store, id: $0)) })
+            Task { @MainActor in
+                let model = ClientModel.shared
+                model.probing = false
+                model.reach.merge(results) { _, new in new }
+                model.refresh()
+            }
+        }
     }
 
     func stopDiscovery() {
         discovery?.stop()
         discovery = nil
+        probeTimer?.invalidate()
+        probeTimer = nil
     }
 
     fileprivate func found(_ ad: Advertisement) {
@@ -113,7 +146,7 @@ final class ClientModel: ObservableObject {
         let ids = Set(known.keys).union(byId.keys).subtracting([ServerModel.shared.serverId])
         computers = ids.map { id in
             let a = byId[id] ?? []
-            return Computer(id: id, name: a.first?.name ?? known[id]?.name ?? id, os: a.first?.os ?? known[id]?.os ?? "", known: known[id], ads: a)
+            return Computer(id: id, name: a.first?.name ?? known[id]?.name ?? id, os: a.first?.os ?? known[id]?.os ?? "", known: known[id], ads: a, reach: reach[id])
         }
         .sorted { ($0.known == nil ? 1 : 0, $0.name.lowercased()) < ($1.known == nil ? 1 : 0, $1.name.lowercased()) }
     }

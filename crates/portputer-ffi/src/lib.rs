@@ -792,3 +792,22 @@ fn init_logging() {
     #[cfg(target_os = "android")]
     android_logger::init_once(android_logger::Config::default().with_tag("portputer").with_max_level(log::LevelFilter::Info));
 }
+
+#[derive(uniffi::Enum, Clone, Debug, PartialEq)]
+pub enum Reachability {
+    /// At one of its addresses; `tailscale` when that's a Tailscale address.
+    Direct { host: String, tailscale: bool },
+    Relay,
+    NotReachable,
+}
+
+/// Whether a paired computer can be reached now, and how, without
+/// connecting to it. Blocks for up to about 8 seconds.
+#[uniffi::export]
+pub fn probe_computer(store_dir: String, id: String) -> Reachability {
+    match client::probe(&PathBuf::from(store_dir), &id) {
+        client::Reachability::Direct { host, tailscale } => Reachability::Direct { host, tailscale },
+        client::Reachability::Relay => Reachability::Relay,
+        client::Reachability::NotReachable => Reachability::NotReachable,
+    }
+}

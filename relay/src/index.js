@@ -16,6 +16,9 @@
 //       allows get in.
 //   GET /accept/<room>/<conn>?key=<k>
 //       The computer's end of that connection.
+//   GET /status/<room>?token=<t>
+//       For a paired device: {"online": true} while the computer listens.
+//       Plain HTTP, so devices can show which computers they can reach.
 //
 // Bytes are passed through as they are. Portputer's own encryption (Noise)
 // runs inside, end to end: the relay sees only ciphertext.
@@ -35,10 +38,10 @@ export default {
       return new Response("Portputer relay\n");
     }
     const [kind, room] = parts;
-    if (!["listen", "connect", "accept"].includes(kind) || !/^[0-9a-f]{64}$/.test(room ?? "")) {
+    if (!["listen", "connect", "accept", "status"].includes(kind) || !/^[0-9a-f]{64}$/.test(room ?? "")) {
       return NOT_FOUND();
     }
-    if (request.headers.get("Upgrade") !== "websocket") {
+    if (kind !== "status" && request.headers.get("Upgrade") !== "websocket") {
       return new Response("WebSocket only\n", { status: 426 });
     }
     return env.ROOMS.get(env.ROOMS.idFromName(room)).fetch(request);
@@ -64,6 +67,13 @@ export class Room {
   async fetch(request) {
     const url = new URL(request.url);
     const [kind, , conn] = url.pathname.split("/").filter(Boolean);
+    if (kind === "status") {
+      const token = url.searchParams.get("token");
+      const allowed = (await this.state.storage.get("allow")) ?? [];
+      if (!token || !allowed.includes(await sha256(token))) return NOT_FOUND();
+      const online = this.state.getWebSockets("listen").length > 0;
+      return new Response(JSON.stringify({ online }), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
+    }
     const { 0: outside, 1: inside } = new WebSocketPair();
 
     if (kind === "listen") {

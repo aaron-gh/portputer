@@ -1167,3 +1167,67 @@ async fn connect_direct(addresses: Vec<(String, u16)>, expected: Option<String>,
     }
     Err(last)
 }
+
+/// Whether a paired computer can be reached now, and how.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Reachability {
+    /// At one of its addresses; `tailscale` when that's a Tailscale address.
+    Direct { host: String, tailscale: bool },
+    /// Through the internet relay.
+    Relay,
+    NotReachable,
+}
+
+fn is_tailscale(host: &str) -> bool {
+    // 100.64.0.0/10, and Tailscale's IPv6 range.
+    match host.parse::<IpAddr>() {
+        Ok(IpAddr::V4(v4)) => v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1]),
+        Ok(IpAddr::V6(v6)) => v6.segments()[0] == 0xfd7a && v6.segments()[1] == 0x115c,
+        Err(_) => false,
+    }
+}
+
+/// Checks whether a paired computer can be reached, without connecting to
+/// it: a TCP connection to each address it's had, all at once, then the
+/// relay's word on whether it's listening there. Nothing reaches the
+/// computer beyond a connection opened and closed.
+pub fn probe(store_dir: &std::path::Path, id: &str) -> Reachability {
+    let Some(known) = ClientStore::new(store_dir).server(id) else { return Reachability::NotReachable };
+    let mut addresses: Vec<(String, u16)> = vec![];
+    if !known.host.is_empty() {
+        addresses.push((known.host.clone(), known.port));
+    }
+    for (h, p) in &known.addresses {
+        addresses.push((h.clone(), *p));
+        let other = if *p == crate::protocol::LOGIN_WINDOW_PORT { crate::protocol::DEFAULT_PORT } else { crate::protocol::LOGIN_WINDOW_PORT };
+        addresses.push((h.clone(), other));
+    }
+    dedup_in_order(&mut addresses);
+    let direct = runtime().block_on(async move {
+        let mut attempts = tokio::task::JoinSet::new();
+        for (host, port) in addresses {
+            attempts.spawn(async move {
+                let target = if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") };
+                match tokio::time::timeout(Duration::from_millis(2500), TcpStream::connect(&target)).await {
+                    Ok(Ok(_)) => Some(host),
+                    _ => None,
+                }
+            });
+        }
+        while let Some(result) = attempts.join_next().await {
+            if let Ok(Some(host)) = result {
+                attempts.abort_all();
+                return Some(host);
+            }
+        }
+        None
+    });
+    if let Some(host) = direct {
+        let tailscale = is_tailscale(&host);
+        return Reachability::Direct { host, tailscale };
+    }
+    match known.relay.as_ref().map(crate::relay::status) {
+        Some(Ok(true)) => Reachability::Relay,
+        _ => Reachability::NotReachable,
+    }
+}

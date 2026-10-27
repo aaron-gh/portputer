@@ -36,5 +36,6 @@ All WebSocket. `<room>` is 64 hex digits.
 | `/listen/<room>?key=<k>&session=<user\|login_window>` | computer | Held open. The first listener claims the room with its key. Sends `{"type":"allow","tokens":[<sha256 of each token>]}`; receives `{"type":"incoming","conn":"<conn>"}` for each device. Text `ping` is answered `pong`. |
 | `/connect/<room>?token=<t>` | device | One relayed connection, to the logged-in user's server, or the login window's if there's no user's. 503 if neither is listening. |
 | `/accept/<room>/<conn>?key=<k>` | computer | Its end of that connection. |
+| `/status/<room>?token=<t>` | device | Plain HTTP: `{"online":true}` while the computer listens, so the device can say which computers it can reach. |
 
 Binary messages are passed to the other end unchanged; closing either end closes the other.

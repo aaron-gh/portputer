@@ -20,8 +20,11 @@
     <string name="status_available">available</string>
     <string name="status_available_user">%1$s logged in</string>
     <string name="status_login_window">at the login window</string>
-    <string name="status_offline">not on the network</string>
-    <string name="status_relay">away from this network</string>
+    <string name="status_offline">not reachable</string>
+    <string name="status_checking">checking</string>
+    <string name="status_tailscale">available through Tailscale</string>
+    <string name="status_other_network">available on another network</string>
+    <string name="status_relay">available through the internet relay</string>
     <string name="status_not_paired">not paired</string>
     <string name="status_connected">connected</string>
     <string name="os_mac">Mac</string>

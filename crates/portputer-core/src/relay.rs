@@ -254,3 +254,15 @@ mod tests {
         assert_eq!(token_hash("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     }
 }
+
+/// Whether the computer is listening at the relay now, for a paired device.
+pub fn status(access: &RelayAccess) -> Result<bool, Error> {
+    install_crypto();
+    let base = access.url.trim().trim_end_matches('/');
+    let url = format!("{base}/status/{}?token={}", access.room, access.token);
+    let agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(5))).build().new_agent();
+    let mut response = agent.get(&url).call().map_err(|e| Error::Protocol(format!("relay: {e}")))?;
+    let text = response.body_mut().read_to_string().map_err(|e| Error::Protocol(format!("relay: {e}")))?;
+    let body: serde_json::Value = serde_json::from_str(&text)?;
+    Ok(body["online"].as_bool().unwrap_or(false))
+}

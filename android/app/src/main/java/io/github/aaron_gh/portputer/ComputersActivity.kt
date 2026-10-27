@@ -22,6 +22,8 @@ import uniffi.portputer_ffi.Discovery
 import uniffi.portputer_ffi.DiscoveryListener
 import uniffi.portputer_ffi.KnownServer
 import uniffi.portputer_ffi.PortputerException
+import uniffi.portputer_ffi.Reachability
+import uniffi.portputer_ffi.probeComputer
 import uniffi.portputer_ffi.SessionType
 import uniffi.portputer_ffi.forgetServer
 import uniffi.portputer_ffi.knownServers
@@ -46,6 +48,16 @@ data class ComputerRow(val id: String, val known: KnownServer?, val ads: List<Ad
 }
 
 class ComputersActivity : Activity(), Connection.Listener {
+    /** How each paired computer not on this network can be reached, when known. */
+    private val reach = HashMap<String, Reachability>()
+    private val checker = android.os.Handler(android.os.Looper.getMainLooper())
+    private var checking = false
+    private val check = object : Runnable {
+        override fun run() {
+            probe()
+            checker.postDelayed(this, 15_000)
+        }
+    }
     private val ads = LinkedHashMap<String, Advertisement>()
     private var discovery: Discovery? = null
     private var multicast: WifiManager.MulticastLock? = null
@@ -101,9 +113,11 @@ class ComputersActivity : Activity(), Connection.Listener {
         }
         keyboardOff.visibility = if (KeyboardService.isEnabled(this)) View.GONE else View.VISIBLE
         refresh()
+        checker.post(check)
     }
 
     override fun onStop() {
+        checker.removeCallbacks(check)
         Connection.removeListener(this)
         discovery?.stop()
         discovery?.close()
@@ -141,12 +155,35 @@ class ComputersActivity : Activity(), Connection.Listener {
             row.userAd != null -> row.userAd!!.user.takeIf { it.isNotEmpty() }?.let { getString(R.string.status_available_user, it) }
                 ?: getString(R.string.status_available)
             row.loginAd != null -> getString(R.string.status_login_window)
-            row.known?.hasRelay == true -> getString(R.string.status_relay)
+            row.known != null -> when (val r = reach[row.id]) {
+                null -> getString(R.string.status_checking)
+                is Reachability.Direct -> getString(if (r.tailscale) R.string.status_tailscale else R.string.status_other_network)
+                is Reachability.Relay -> getString(R.string.status_relay)
+                is Reachability.NotReachable -> getString(R.string.status_offline)
+            }
             else -> getString(R.string.status_offline)
         }
         val parts = mutableListOf(os, state)
         if (row.known == null) parts.add(getString(R.string.status_not_paired))
         return parts.joinToString(", ")
+    }
+
+    /** Checks the paired computers that discovery doesn't see here. */
+    private fun probe() {
+        if (checking) return
+        val ids = adapter.rows.filter { it.known != null && it.ads.isEmpty() && Connection.info?.id != it.id }.map { it.id }
+        if (ids.isEmpty()) return
+        checking = true
+        kotlin.concurrent.thread(name = "portputer-probe") {
+            val results = ids.associateWith { probeComputer(Connection.storeDir, it) }
+            runOnUiThread {
+                checking = false
+                if (results.any { (id, r) -> reach[id] != r }) {
+                    reach.putAll(results)
+                    refresh()
+                }
+            }
+        }
     }
 
     private fun open(row: ComputerRow) {
@@ -218,7 +255,7 @@ class ComputersActivity : Activity(), Connection.Listener {
             holder.row.contentDescription = "${row.name}, $detailText"
             holder.row.setOnClickListener { open(row) }
             Ui.clickLabel(holder.row, getString(R.string.connect))
-            val canWake = row.ads.isEmpty() && row.macs.isNotEmpty()
+            val canWake = row.ads.isEmpty() && row.macs.isNotEmpty() && reach[row.id] !is Reachability.Direct && reach[row.id] !is Reachability.Relay
             holder.wake.visibility = if (canWake) View.VISIBLE else View.GONE
             holder.wake.setOnClickListener { wakeComputer(row) }
             holder.forget.visibility = if (row.known != null) View.VISIBLE else View.GONE
