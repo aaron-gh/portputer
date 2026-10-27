@@ -53,6 +53,10 @@ object Connection {
         private set
     var audioWanted = false
         private set
+    var micWanted = false
+        private set
+    var micOn = false
+        private set
     /** Modifiers held from the key menu. */
     val held = linkedSetOf<String>()
 
@@ -136,6 +140,8 @@ object Connection {
         capturing = false
         audioOn = false
         audioWanted = false
+        micWanted = false
+        micOn = false
         held.clear()
         if (state !is State.Idle) {
             state = State.Idle
@@ -208,6 +214,15 @@ object Connection {
         changed()
     }
 
+    /** Sends the phone's microphone to the computer. Needs RECORD_AUDIO. */
+    fun setMic(on: Boolean) {
+        micWanted = on
+        if (on) session?.startMic() else session?.stopMic()
+        // The foreground service is started again with the microphone type.
+        if (on) ConnectionService.start(app)
+        changed()
+    }
+
     fun setSpeakersMuted(muted: Boolean) {
         Settings(app).muteSpeakers = muted
         session?.setSpeakersMuted(muted)
@@ -252,6 +267,8 @@ object Connection {
             capturing = false
             audioOn = false
             audioWanted = false
+            micWanted = false
+            micOn = false
             held.clear()
             state = State.Closed(name, app.getString(R.string.closed, name, reason))
             changed()
@@ -265,6 +282,10 @@ object Connection {
                 audioWanted = false
                 changed()
             }
+            if (code == "mic_failed") {
+                micWanted = false
+                changed()
+            }
             say(message)
         }
 
@@ -275,6 +296,16 @@ object Connection {
 
         override fun audioStopped(reason: String) = post {
             audioOn = false
+            changed()
+        }
+
+        override fun micStarted() = post {
+            micOn = true
+            changed()
+        }
+
+        override fun micStopped(reason: String) = post {
+            micOn = false
             changed()
         }
     }

@@ -143,6 +143,19 @@
                     android:layout_height="48dp"
                     android:max="100" />
 
+                <Switch
+                    android:id="@+id/mic"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:text="@string/mic_switch" />
+
+                <TextView
+                    android:id="@+id/mic_help"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingBottom="8dp" />
+
                 <Button
                     android:id="@+id/keys"
                     android:layout_width="match_parent"

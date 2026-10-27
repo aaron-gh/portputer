@@ -16,6 +16,7 @@ final class ServerModel: ObservableObject {
     @Published private(set) var pairingSecondsLeft: UInt64 = 0
     @Published private(set) var inputAllowed = false
     @Published private(set) var systemComponents = false
+    @Published private(set) var microphoneDriver = false
     @Published private(set) var openAtLogin = false
     @Published var status = ""
 
@@ -84,6 +85,7 @@ final class ServerModel: ObservableObject {
         paired = handle?.paired() ?? []
         connected = handle?.connected() ?? []
         systemComponents = systemComponentsInstalled()
+        microphoneDriver = microphoneDriverInstalled()
         openAtLogin = SMAppService.mainApp.status == .enabled
     }
 
@@ -139,6 +141,27 @@ final class ServerModel: ObservableObject {
             try Portputer.syncLoginWindow(storeDir: storeDir)
         } catch {
             status = "Login window: \(error.localizedDescription)"
+        }
+    }
+
+    /// Installs or removes the Portputer Microphone driver, with an
+    /// administrator's password. Core Audio restarts, so sound stops briefly.
+    func setMicrophoneDriver(_ install: Bool) {
+        let agent = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/portputer-agent").path
+        let escaped = agent.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        let command = install ? "install-driver" : "uninstall-driver"
+        let source = "do shell script quoted form of \"\(escaped)\" & \" \(command)\" with administrator privileges"
+        var error: NSDictionary?
+        NSAppleScript(source: source)?.executeAndReturnError(&error)
+        if let error, (error[NSAppleScript.errorNumber] as? Int) != -128 {
+            status = "Microphone driver: \(error[NSAppleScript.errorMessage] as? String ?? "unknown error")"
+            return
+        }
+        // Core Audio takes a moment to come back with the driver loaded.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            self.refresh()
+            self.status = self.microphoneDriver ? "Portputer Microphone installed." : "Portputer Microphone removed."
+            announce(self.status)
         }
     }
 

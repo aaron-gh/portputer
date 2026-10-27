@@ -53,6 +53,8 @@ pub struct ServerInfo {
     pub audio: bool,
     /// The computer's speakers can be muted while it streams.
     pub mute: bool,
+    /// The computer offers this device's microphone to its apps.
+    pub mic: bool,
     pub host: String,
     pub port: u16,
     /// Paired both ways: keys and commands are allowed.
@@ -74,6 +76,8 @@ pub enum SessionEvent {
     Error { code: String, message: String },
     AudioStarted { sample_rate: u32 },
     AudioStopped { reason: String },
+    MicStarted,
+    MicStopped { reason: String },
 }
 
 pub trait SessionObserver: Send + Sync {
@@ -165,7 +169,7 @@ async fn connect_once(host: &str, port: u16, expected: Option<&str>, identity: &
     let welcome: ServerMessage = tokio::time::timeout(Duration::from_secs(10), reader.recv())
         .await
         .map_err(|_| Error::Protocol("no welcome from the server".into()))??;
-    let ServerMessage::Welcome { server_id, name: server_name, os, session, user, paired, version, power, audio, mute } = welcome else {
+    let ServerMessage::Welcome { server_id, name: server_name, os, session, user, paired, version, power, audio, mute, mic } = welcome else {
         if let ServerMessage::Error { message, .. } = welcome {
             return Err(Error::Refused(message));
         }
@@ -180,7 +184,7 @@ async fn connect_once(host: &str, port: u16, expected: Option<&str>, identity: &
         writer: hs.writer,
         hash: hs.hash,
         public_key: hs.remote_static,
-        info: ServerInfo { id, name: server_name, os, session, user, version, power, audio, mute, host: host.to_string(), port, trusted: pinned && paired },
+        info: ServerInfo { id, name: server_name, os, session, user, version, power, audio, mute, mic, host: host.to_string(), port, trusted: pinned && paired },
         peer_ip: addr.ip(),
     })
 }
@@ -215,6 +219,7 @@ impl Session {
             identity,
             name: config.name,
             audio_wanted: false,
+            mic_wanted: false,
         };
         runtime().spawn(task.run(conn, rx));
         Ok(session)
@@ -267,6 +272,15 @@ impl Session {
     pub fn set_speakers_muted(&self, muted: bool) {
         self.inner.settings.lock().unwrap().mute_speakers = muted;
         self.send(ClientMessage::MuteSpeakers { muted });
+    }
+
+    /// Sends this device's microphone to the computer.
+    pub fn start_mic(&self) {
+        self.send(ClientMessage::MicStart);
+    }
+
+    pub fn stop_mic(&self) {
+        self.send(ClientMessage::MicStop);
     }
 
     pub fn stop_audio(&self) {
@@ -326,6 +340,7 @@ struct Supervisor {
     identity: Identity,
     name: String,
     audio_wanted: bool,
+    mic_wanted: bool,
 }
 
 enum Ended {
@@ -439,6 +454,7 @@ impl Supervisor {
             }
         });
         let mut audio: Option<AudioReceiver> = None;
+        let mut mic: Option<MicSender> = None;
         let mut pending_pair: Option<(String, std::sync::mpsc::Sender<Result<(), String>>)> = None;
         let mut ping = tokio::time::interval(PING_EVERY);
         let mut last_heard = Instant::now();
@@ -446,6 +462,9 @@ impl Supervisor {
         if info.trusted && self.audio_wanted {
             let mute = self.inner.settings.lock().unwrap().mute_speakers;
             let _ = writer.send(&ClientMessage::AudioStart { mute }).await;
+        }
+        if info.trusted && self.mic_wanted {
+            let _ = writer.send(&ClientMessage::MicStart).await;
         }
         let ended = loop {
             tokio::select! {
@@ -470,6 +489,11 @@ impl Supervisor {
                             }
                             match &message {
                                 ClientMessage::AudioStart { .. } => self.audio_wanted = true,
+                                ClientMessage::MicStart => self.mic_wanted = true,
+                                ClientMessage::MicStop => {
+                                    self.mic_wanted = false;
+                                    mic = None;
+                                }
                                 ClientMessage::AudioStop => {
                                     self.audio_wanted = false;
                                     audio = None;
@@ -528,6 +552,9 @@ impl Supervisor {
                                 if code == errors::AUDIO_FAILED {
                                     self.audio_wanted = false;
                                 }
+                                if code == errors::MIC_FAILED {
+                                    self.mic_wanted = false;
+                                }
                                 self.emit(SessionEvent::Error { code, message });
                             }
                         }
@@ -544,6 +571,25 @@ impl Supervisor {
                                     self.audio_wanted = false;
                                     self.emit(SessionEvent::Error { code: errors::AUDIO_FAILED.into(), message: e.to_string() });
                                 }
+                            }
+                        }
+                        ServerMessage::MicReady { port, key } => {
+                            mic = None;
+                            match start_mic_sender(peer_ip, port, &key) {
+                                Ok(m) => {
+                                    mic = Some(m);
+                                    self.emit(SessionEvent::MicStarted);
+                                }
+                                Err(e) => {
+                                    let _ = writer.send(&ClientMessage::MicStop).await;
+                                    self.mic_wanted = false;
+                                    self.emit(SessionEvent::Error { code: errors::MIC_FAILED.into(), message: e.to_string() });
+                                }
+                            }
+                        }
+                        ServerMessage::MicStopped { reason } => {
+                            if mic.take().is_some() {
+                                self.emit(SessionEvent::MicStopped { reason });
                             }
                         }
                         ServerMessage::AudioStopped { reason } => {
@@ -567,6 +613,9 @@ impl Supervisor {
         };
         if let Some((_, reply)) = pending_pair.take() {
             let _ = reply.send(Err("The connection closed.".into()));
+        }
+        if mic.take().is_some() {
+            self.emit(SessionEvent::MicStopped { reason: "disconnected".into() });
         }
         let had_audio = audio.take().is_some();
         *self.inner.jitter.lock().unwrap() = None;
@@ -634,4 +683,33 @@ pub fn known_servers(store_dir: &std::path::Path) -> Vec<KnownServer> {
 
 pub fn forget_server(store_dir: &std::path::Path, id: &str) -> Result<(), Error> {
     ClientStore::new(store_dir).forget(id)
+}
+
+/// This device's microphone, sent to the computer as it's recorded.
+struct MicSender {
+    _capture: audio::Capture,
+}
+
+fn start_mic_sender(server: IpAddr, port: u16, key: &str) -> Result<MicSender, Error> {
+    let key: [u8; 32] = hex::decode(key)
+        .ok()
+        .and_then(|k| k.try_into().ok())
+        .ok_or_else(|| Error::Protocol("bad microphone key".into()))?;
+    let key = PacketKey::new(&key);
+    let bind: IpAddr = if server.is_ipv6() { "::".parse().unwrap() } else { "0.0.0.0".parse().unwrap() };
+    let socket = UdpSocket::bind((bind, 0))?;
+    socket.connect((server, port))?;
+    socket.set_nonblocking(true)?;
+    let mut resample = audio::ToMono48k::default();
+    let mut pending: Vec<f32> = Vec::new();
+    let mut seq = 0u32;
+    let capture = audio::start_input(move |samples, channels, rate| {
+        resample.push(samples, channels, rate, &mut pending);
+        while pending.len() >= udp::MIC_FRAMES {
+            let frame: Vec<i16> = pending.drain(..udp::MIC_FRAMES).map(|s| (s.clamp(-1.0, 1.0) * 32767.0) as i16).collect();
+            let _ = socket.send(&key.seal(udp::KIND_MIC, seq, &udp::encode_pcm(&frame)));
+            seq = seq.wrapping_add(1);
+        }
+    })?;
+    Ok(MicSender { _capture: capture })
 }

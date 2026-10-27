@@ -63,6 +63,10 @@ pub enum ClientMessage {
     },
     AudioStop,
     MuteSpeakers { muted: bool },
+    /// Starts sending this device's microphone, which the computer offers to
+    /// its apps as Portputer Microphone.
+    MicStart,
+    MicStop,
     Power {
         action: PowerAction,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -91,6 +95,9 @@ pub enum ServerMessage {
         /// Whether the computer's speakers can be muted while it streams.
         #[serde(default)]
         mute: bool,
+        /// Whether the computer has the Portputer Microphone driver.
+        #[serde(default)]
+        mic: bool,
     },
     /// The server's half of the pairing proof: "server" and the handshake
     /// hash.
@@ -108,6 +115,9 @@ pub enum ServerMessage {
         frames: u32,
     },
     AudioStopped { reason: String },
+    /// Where to send microphone packets (kind 3, 48 kHz mono, 5 ms), and their key.
+    MicReady { port: u16, key: String },
+    MicStopped { reason: String },
     Pong { n: u64 },
 }
 
@@ -119,6 +129,7 @@ pub mod errors {
     pub const POWER_FAILED: &str = "power_failed";
     pub const AUDIO_FAILED: &str = "audio_failed";
     pub const MUTE_FAILED: &str = "mute_failed";
+    pub const MIC_FAILED: &str = "mic_failed";
     pub const BAD_MESSAGE: &str = "bad_message";
     pub const VERSION: &str = "version";
 }

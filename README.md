@@ -33,6 +33,7 @@ Not yet run: the Mac app's client window, Mute Computer Speakers, the login wind
 - Pairing: once per computer, with the 12-character code the computer shows.
 - Send Keyboard to Computer: the Portputer Keyboard accessibility service takes key events from external keyboards (built-in keyboards optionally) before the rest of the system and sends them to the computer. Keys go by physical position by default, so the computer's keyboard layout applies; Settings switches to the device's layout. The release shortcut switches between computer and phone: Control-Meta-Escape by default (Meta is the Windows or Command key), with others in Settings. The phone's own buttons, such as volume, stay on the phone.
 - Computer Audio, with volume, and Mute Computer Speakers, which keeps the sound from the computer's own speakers while it plays on the phone. On a Mac the capture tap is set to muted, so the stream keeps the sound; on Windows the output device is muted, and put back as it was when the audio stops. Audio buffer in Settings.
+- Send Microphone: the phone's microphone becomes Portputer Microphone, an input device on the Mac (needs the Portputer Microphone driver, below).
 - Keys and Shortcuts: keys a phone keyboard lacks (Command, Option, Fn, F1 to F24, media, brightness, Mission Control, Eject, Insert, Print Screen and others) and system shortcuts for the connected system. Activating a key presses it. Modifiers also have Hold, as a custom action and as a button hidden from screen readers.
 - Type Text.
 - Power: Restart, Shut Down, Sleep, Lock Screen, Log Out, Force Restart, Restart Without FileVault Unlock.
@@ -53,6 +54,8 @@ A menu bar app (no Dock icon; opening it again shows Settings):
 - Pair New Device: shows the code, spelled out for VoiceOver.
 - Settings: permissions (Accessibility for typing; System Audio Recording, which macOS requests on first use), paired devices, login window support.
 - Connect to Computer: the client, for controlling another Mac or a Windows PC. Send Keyboard to Computer takes every key, system shortcuts included (as AAE does), until Control-Command-Escape.
+
+Portputer Microphone (Settings, Microphone, Install, with an administrator's password) installs Portputer's own audio driver, `/Library/Audio/Plug-Ins/HAL/PortputerMicrophone.driver`: an Audio Server plug-in, which runs in user space and needs no kernel extension. It has an input device, Portputer Microphone, which apps record from, and a hidden output device the server plays the connected device's microphone into; both share one buffer and one clock. 48 kHz mono. Installing or removing it restarts Core Audio, which stops all sound for a moment. Source: `macos/Driver/`; `macos/Driver/test.sh` loads the built driver as Core Audio would and checks its devices and loopback.
 
 Login window support (Settings, Install, with an administrator's password) installs:
 
@@ -78,7 +81,7 @@ System audio is captured with WASAPI loopback, keys are sent with SendInput by s
 
 Build on the Mac: `windows/build.sh`, which needs MinGW-w64 (`brew install mingw-w64`).
 
-Not yet on Windows: control before login (a service running on the secure desktop), Control-Alt-Delete, and Restart Without Disk Unlock (BitLocker).
+Not yet on Windows: the microphone driver (Windows only loads kernel audio drivers signed by Microsoft), control before login (a service running on the secure desktop), Control-Alt-Delete, and Restart Without Disk Unlock (BitLocker).
 
 ## Security
 

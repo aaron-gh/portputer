@@ -145,6 +145,9 @@ struct ClientView: View {
             }
             Slider(value: $model.volume, in: 0...1) { Text("Audio volume") }
                 .disabled(!info.audio)
+            if info.mic {
+                Toggle("Send Microphone", isOn: Binding(get: { model.micWanted }, set: { model.setMic($0) }))
+            }
             HStack {
                 Menu("Keys and Shortcuts") {
                     ForEach(keyMenu(os: info.os), id: \.title) { section in

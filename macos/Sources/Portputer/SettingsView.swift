@@ -65,6 +65,19 @@ struct SettingsView: View {
                 .disabled(!server.running)
             }
 
+            Section("Microphone") {
+                Text("Portputer Microphone is an audio input device for this Mac's apps. It records the microphone of a connected device that has Send Microphone on. Installs a driver with an administrator's password; installing or removing it stops all sound for a moment.")
+                    .fixedSize(horizontal: false, vertical: true)
+                LabeledContent("Portputer Microphone driver") {
+                    HStack {
+                        Text(server.microphoneDriver ? "Installed" : "Not installed")
+                        Button(server.microphoneDriver ? "Remove…" : "Install…") {
+                            server.setMicrophoneDriver(!server.microphoneDriver)
+                        }
+                    }
+                }
+            }
+
             Section("Login Window") {
                 Text("Lets paired devices type at the login window after a restart, before anyone logs in, and restart the Mac immediately or past the FileVault unlock screen. Installs a helper with an administrator's password.")
                     .fixedSize(horizontal: false, vertical: true)

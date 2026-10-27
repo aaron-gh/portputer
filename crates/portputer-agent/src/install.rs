@@ -84,3 +84,45 @@ pub fn uninstall() -> ! {
     println!("Removed.");
     std::process::exit(0)
 }
+
+const DRIVER: &str = "/Library/Audio/Plug-Ins/HAL/PortputerMicrophone.driver";
+
+/// Core Audio loads plug-ins when it starts, so it's restarted: every app's
+/// sound stops for a moment.
+fn restart_core_audio() {
+    if !launchctl(&["kickstart", "-k", "system/com.apple.audio.coreaudiod"]) {
+        let _ = Command::new("/usr/bin/killall").arg("coreaudiod").status();
+    }
+}
+
+pub fn install_driver(bundle: Option<&str>) -> ! {
+    require_root();
+    let source = match bundle {
+        Some(path) => std::path::PathBuf::from(path),
+        // Contents/Helpers/portputer-agent -> Contents/Resources/PortputerMicrophone.driver
+        None => std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent()?.parent().map(|c| c.join("Resources/PortputerMicrophone.driver")))
+            .unwrap_or_default(),
+    };
+    if !source.join("Contents/Info.plist").is_file() {
+        fail(format!("No driver at {}.", source.display()));
+    }
+    let _ = std::fs::remove_dir_all(DRIVER);
+    let status = Command::new("/usr/bin/ditto").arg(&source).arg(DRIVER).status();
+    if !status.is_ok_and(|s| s.success()) {
+        fail("Copying the driver failed.".into());
+    }
+    let _ = Command::new("/usr/sbin/chown").args(["-R", "root:wheel", DRIVER]).status();
+    restart_core_audio();
+    println!("Installed.");
+    std::process::exit(0)
+}
+
+pub fn uninstall_driver() -> ! {
+    require_root();
+    let _ = std::fs::remove_dir_all(DRIVER);
+    restart_core_audio();
+    println!("Removed.");
+    std::process::exit(0)
+}

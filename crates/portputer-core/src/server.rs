@@ -271,6 +271,7 @@ async fn serve(shared: Arc<Shared>, stream: tokio::net::TcpStream, address: Sock
             power: platform::power_actions(shared.session),
             audio: cfg!(any(target_os = "macos", windows)),
             mute: platform::can_mute_speakers(),
+            mic: microphone_available(),
         })
         .await?;
     if paired && !platform::input_allowed(false) {
@@ -278,6 +279,7 @@ async fn serve(shared: Arc<Shared>, stream: tokio::net::TcpStream, address: Sock
     }
 
     let mut audio: Option<AudioSubscription> = None;
+    let mut mic: Option<MicSink> = None;
     let result: Result<(), Error> = async {
         loop {
             let message: ClientMessage = tokio::time::timeout(Duration::from_secs(30), reader.recv())
@@ -374,6 +376,22 @@ async fn serve(shared: Arc<Shared>, stream: tokio::net::TcpStream, address: Sock
                         writer.send(&ServerMessage::Error { code: errors::MUTE_FAILED.into(), message }).await?;
                     }
                 }
+                ClientMessage::MicStart => {
+                    mic = None;
+                    match start_microphone(address.ip()) {
+                        Ok((sink, ready)) => {
+                            mic = Some(sink);
+                            writer.send(&ready).await?;
+                        }
+                        Err(e) => {
+                            writer.send(&ServerMessage::Error { code: errors::MIC_FAILED.into(), message: e.to_string() }).await?;
+                        }
+                    }
+                }
+                ClientMessage::MicStop => {
+                    mic = None;
+                    writer.send(&ServerMessage::MicStopped { reason: "stopped".into() }).await?;
+                }
                 ClientMessage::AudioStop => {
                     audio = None;
                     writer.send(&ServerMessage::AudioStopped { reason: "stopped".into() }).await?;
@@ -401,6 +419,7 @@ async fn serve(shared: Arc<Shared>, stream: tokio::net::TcpStream, address: Sock
     .await;
 
     drop(audio);
+    drop(mic);
     let _ = shared.input.send(InputCommand::ReleaseAll);
     shared.clients.lock().unwrap().remove(&conn);
     shared.emit(ServerEvent::Disconnected { client_id, name });
@@ -418,6 +437,61 @@ fn input_notice() -> ServerMessage {
         "Portputer can't type on this computer."
     };
     ServerMessage::Notice { code: notices::INPUT_PERMISSION.into(), message: message.into() }
+}
+
+/// Whether this computer can offer a client's microphone to its apps.
+fn microphone_available() -> bool {
+    #[cfg(target_os = "macos")]
+    return audio::feed::installed();
+    #[cfg(not(target_os = "macos"))]
+    false
+}
+
+/// A client's microphone, played into the Portputer Microphone driver.
+struct MicSink {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    _output: Box<dyn Send>,
+}
+
+impl Drop for MicSink {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Plays a microphone stream where this computer's apps can record it.
+fn microphone_output(jitter: Arc<Mutex<crate::jitter::JitterBuffer>>) -> Result<Box<dyn Send>, Error> {
+    #[cfg(target_os = "macos")]
+    return Ok(Box::new(audio::feed::start(jitter)?));
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = jitter;
+        Err(Error::Audio("This computer has no Portputer Microphone driver.".into()))
+    }
+}
+
+fn start_microphone(client_ip: std::net::IpAddr) -> Result<(MicSink, ServerMessage), Error> {
+    let jitter = Arc::new(Mutex::new(crate::jitter::JitterBuffer::new(udp::MIC_RATE, 1, udp::MIC_FRAMES as u32, 60)));
+    let output = microphone_output(jitter.clone())?;
+    let socket = UdpSocket::bind(("0.0.0.0", 0))?;
+    socket.set_read_timeout(Some(Duration::from_millis(500)))?;
+    let port = socket.local_addr()?.port();
+    let (key_bytes, key) = PacketKey::random();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stopped = stop.clone();
+    std::thread::Builder::new().name("portputer-mic-recv".into()).spawn(move || {
+        let mut buf = vec![0u8; 4096];
+        while !stopped.load(Ordering::Relaxed) {
+            let Ok((n, from)) = socket.recv_from(&mut buf) else { continue };
+            if from.ip() != client_ip {
+                continue;
+            }
+            if let Some((udp::KIND_MIC, seq, payload)) = key.open(&buf[..n]) {
+                jitter.lock().unwrap().push(seq, udp::decode_pcm(&payload));
+            }
+        }
+    })?;
+    Ok((MicSink { stop, _output: output }, ServerMessage::MicReady { port, key: hex::encode(key_bytes) }))
 }
 
 /// One client's audio stream: its own UDP socket, key and sequence numbers.

@@ -11,6 +11,10 @@
 //!       As root: puts the agent, the daemon and the login window agent in
 //!       place, or takes them away. The Mac app runs these with an
 //!       administrator's approval.
+//!   portputer-agent install-driver [BUNDLE] | uninstall-driver
+//!       As root: puts the Portputer Microphone driver in
+//!       /Library/Audio/Plug-Ins/HAL (by default the one in the app beside
+//!       the agent), or takes it away, and restarts Core Audio.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -32,7 +36,7 @@ impl ServerObserver for Log {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: portputer-agent serve [--login-window] [--store DIR] [--port N] | helper | install | uninstall");
+    eprintln!("usage: portputer-agent serve [--login-window] [--store DIR] [--port N] | helper | install | uninstall | install-driver [BUNDLE] | uninstall-driver");
     std::process::exit(2)
 }
 
@@ -102,6 +106,10 @@ fn main() {
         Some("install") => install::install(),
         #[cfg(target_os = "macos")]
         Some("uninstall") => install::uninstall(),
+        #[cfg(target_os = "macos")]
+        Some("install-driver") => install::install_driver(args.get(1).map(String::as_str)),
+        #[cfg(target_os = "macos")]
+        Some("uninstall-driver") => install::uninstall_driver(),
         _ => usage(),
     }
 }

@@ -11,6 +11,11 @@ pub const MAGIC: u8 = 0x50;
 pub const KIND_AUDIO: u8 = 1;
 /// Client to server: empty, every 500 ms, so the server knows where to send.
 pub const KIND_KEEPALIVE: u8 = 2;
+/// Client to server: the client's microphone, PCM, 16-bit little-endian,
+/// 48 kHz mono, 240 frames (5 ms).
+pub const KIND_MIC: u8 = 3;
+pub const MIC_RATE: u32 = 48000;
+pub const MIC_FRAMES: usize = 240;
 pub const HEADER: usize = 6;
 pub const KEEPALIVE_INTERVAL_MS: u64 = 500;
 /// The server stops sending this long after the last keep-alive.

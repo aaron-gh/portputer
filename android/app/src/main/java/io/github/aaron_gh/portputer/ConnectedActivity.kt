@@ -17,6 +17,10 @@ import uniffi.portputer_ffi.SessionType
 
 /** The connected computer: pairing, the keyboard and audio switches, and what can be sent. */
 class ConnectedActivity : Activity(), Connection.Listener {
+    private companion object {
+        const val MIC_REQUEST = 2
+    }
+
     private lateinit var status: TextView
     private lateinit var message: TextView
     private lateinit var pairSection: View
@@ -29,6 +33,8 @@ class ConnectedActivity : Activity(), Connection.Listener {
     private lateinit var keyboardOff: View
     private lateinit var audio: Switch
     private lateinit var muteSpeakers: Switch
+    private lateinit var mic: Switch
+    private lateinit var micHelp: TextView
     private lateinit var volume: SeekBar
     private lateinit var power: Button
     private lateinit var disconnect: Button
@@ -51,6 +57,8 @@ class ConnectedActivity : Activity(), Connection.Listener {
         keyboardOff = findViewById(R.id.keyboard_off_section)
         audio = findViewById(R.id.audio)
         muteSpeakers = findViewById(R.id.mute_speakers)
+        mic = findViewById(R.id.mic)
+        micHelp = findViewById(R.id.mic_help)
         volume = findViewById(R.id.volume)
         power = findViewById(R.id.power)
         disconnect = findViewById(R.id.disconnect)
@@ -67,6 +75,14 @@ class ConnectedActivity : Activity(), Connection.Listener {
         capture.setOnCheckedChangeListener { _, on -> if (!updating) Connection.setCapturing(on) }
         audio.setOnCheckedChangeListener { _, on -> if (!updating) Connection.setAudio(on) }
         muteSpeakers.setOnCheckedChangeListener { _, on -> if (!updating) Connection.setSpeakersMuted(on) }
+        mic.setOnCheckedChangeListener { _, on ->
+            if (updating) return@setOnCheckedChangeListener
+            if (on && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), MIC_REQUEST)
+            } else {
+                Connection.setMic(on)
+            }
+        }
         volume.progress = Settings(this).volume
         volume.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
@@ -161,6 +177,10 @@ class ConnectedActivity : Activity(), Connection.Listener {
                     controls.visibility = View.VISIBLE
                     setControlsEnabled(true)
                     renderControls(info.name, info.audio, info.mute, info.power.isNotEmpty())
+                    mic.visibility = if (info.mic) View.VISIBLE else View.GONE
+                    micHelp.visibility = mic.visibility
+                    micHelp.text = getString(R.string.mic_help, info.name)
+                    mic.isChecked = Connection.micWanted
                 }
             }
             is Connection.State.Reconnecting -> {
@@ -197,7 +217,18 @@ class ConnectedActivity : Activity(), Connection.Listener {
     }
 
     private fun setControlsEnabled(enabled: Boolean) {
-        listOf<View>(capture, audio, muteSpeakers, volume, power, findViewById(R.id.keys), findViewById(R.id.text)).forEach { it.isEnabled = enabled }
+        listOf<View>(capture, audio, muteSpeakers, mic, volume, power, findViewById(R.id.keys), findViewById(R.id.text)).forEach { it.isEnabled = enabled }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, results: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, results)
+        if (requestCode != MIC_REQUEST) return
+        if (results.firstOrNull() == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            Connection.setMic(true)
+        } else {
+            onMessage(getString(R.string.mic_denied))
+            render()
+        }
     }
 
     private fun pair() {

@@ -45,6 +45,8 @@ final class ClientModel: ObservableObject {
     @Published private(set) var capturing = false
     @Published private(set) var audioOn = false
     @Published private(set) var audioWanted = false
+    @Published private(set) var micWanted = false
+    @Published private(set) var micOn = false
     @Published var message = ""
     @Published var volume: Double = UserDefaults.standard.object(forKey: "clientVolume") as? Double ?? 1 {
         didSet {
@@ -172,6 +174,8 @@ final class ClientModel: ObservableObject {
         session = nil
         audioOn = false
         audioWanted = false
+        micWanted = false
+        micOn = false
         state = .idle
     }
 
@@ -203,6 +207,11 @@ final class ClientModel: ObservableObject {
     func setAudio(_ on: Bool) {
         audioWanted = on
         on ? session?.startAudio() : session?.stopAudio()
+    }
+
+    func setMic(_ on: Bool) {
+        micWanted = on
+        on ? session?.startMic() : session?.stopMic()
     }
 
     func key(_ code: String, down: Bool, repeat isRepeat: Bool = false) {
@@ -287,12 +296,15 @@ final class ClientModel: ObservableObject {
         func error(code: String, message: String) {
             onMain { m in
                 if code == "audio_failed" { m.audioWanted = false }
+                if code == "mic_failed" { m.micWanted = false }
                 m.message = message
                 announce(message)
             }
         }
 
         func audioStarted(sampleRate: UInt32) { onMain { $0.audioOn = true } }
+        func micStarted() { onMain { $0.micOn = true } }
+        func micStopped(reason: String) { onMain { $0.micOn = false } }
         func audioStopped(reason: String) { onMain { $0.audioOn = false } }
     }
 }

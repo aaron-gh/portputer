@@ -44,15 +44,17 @@ A man in the middle has a different `h` with each side, so can't produce either 
 
 | Type | Fields |
 |---|---|
-| `welcome` | `server_id`, `name`, `os`, `session`, `user`, `paired`, `version`, `power` (actions available), `audio` (bool), `mute` (bool: speakers can be muted while streaming) |
+| `welcome` | `server_id`, `name`, `os`, `session`, `user`, `paired`, `version`, `power` (actions available), `audio` (bool), `mute` (bool: speakers can be muted while streaming), `mic` (bool: the Portputer Microphone driver is installed) |
 | `paired` | `proof` |
 | `error` | `code`, `message` |
 | `notice` | `code`, `message` (such as a missing permission on the server) |
 | `audio_ready` | `port` (UDP), `key` (hex, 32 bytes), `sample_rate`, `channels`, `frames` (per packet) |
 | `audio_stopped` | `reason` |
+| `mic_ready` | `port` (UDP), `key` (hex, 32 bytes) |
+| `mic_stopped` | `reason` |
 | `pong` | `n` |
 
-Error codes: `not_paired`, `pairing_failed`, `no_pairing_code`, `unsupported`, `power_failed`, `audio_failed`, `mute_failed`, `bad_message`, `version`.
+Error codes: `not_paired`, `pairing_failed`, `no_pairing_code`, `unsupported`, `power_failed`, `audio_failed`, `mute_failed`, `mic_failed`, `bad_message`, `version`.
 
 The speakers are muted while any client streaming audio asks for it, and unmuted when none does or the stream stops.
 
@@ -67,6 +69,7 @@ The speakers are muted while any client streaming audio asks for it, and unmuted
 | `audio_start` | `mute` (optional): keep the sound from the computer's speakers while it streams |
 | `audio_stop` | |
 | `mute_speakers` | `muted` |
+| `mic_start` / `mic_stop` | the client's microphone, to the server's Portputer Microphone |
 | `power` | `action`: `restart`, `shutdown`, `sleep`, `log_out`, `lock`, `force_restart`, `unlocked_restart`; `user` and `password` for `unlocked_restart` |
 | `ping` | `n`, every 5 seconds |
 
@@ -84,5 +87,6 @@ Packet: `0x50`, kind, sequence number (32-bit big-endian), then ChaCha20-Poly130
 |---|---|---|
 | 1 | server to client | PCM, 16-bit little-endian, interleaved, `frames` frames (5 ms) |
 | 2 | client to server | empty keep-alive |
+| 3 | client to server | microphone: PCM, 16-bit little-endian, 48 kHz mono, 240 frames (5 ms), to the `mic_ready` port, with its key |
 
 The client's jitter buffer orders packets by sequence number, holds a set amount (20 to 250 ms, 40 by default), drops packets that arrive after their turn, replaces a lost packet with the previous one at half volume (at most three times, then silence), and resamples to the output device's rate with a speed correction of up to 1% to keep the buffer at its target as the two clocks drift.

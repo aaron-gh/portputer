@@ -71,6 +71,9 @@ if [[ -z "$SIGN_ID" ]]; then
         SIGN_ID="-"
     fi
 fi
+echo "Building the Portputer Microphone driver."
+macos/Driver/build.sh "$SIGN_ID"
+cp -R macos/build/PortputerMicrophone.driver "$APP/Contents/Resources/"
 codesign --force --sign "$SIGN_ID" --identifier io.github.aaron-gh.portputer.agent "$APP/Contents/Helpers/portputer-agent" >/dev/null
 codesign --force --sign "$SIGN_ID" "$APP" >/dev/null
 echo "Built $APP (signed: $SIGN_ID)"

@@ -61,6 +61,10 @@
     <string name="audio_switch">Computer Audio</string>
     <string name="audio_volume">Audio volume</string>
     <string name="mute_speakers_switch">Mute Computer Speakers</string>
+    <string name="mic_switch">Send Microphone</string>
+    <string name="mic_help">Apps on %1$s record this phone\'s microphone from the Portputer Microphone input.</string>
+    <string name="mic_denied">Microphone permission denied.</string>
+    <string name="mic_started">Microphone on.</string>
     <string name="audio_unavailable">This computer doesn\'t send audio.</string>
     <string name="audio_started">Audio on.</string>
     <string name="audio_stopped">Audio off.</string>

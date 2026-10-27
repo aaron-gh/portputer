@@ -66,7 +66,12 @@ class ConnectionService : Service(), Connection.Listener {
                 return START_NOT_STICKY
             }
         }
-        if (Build.VERSION.SDK_INT >= 29) {
+        if (Build.VERSION.SDK_INT >= 30) {
+            // The microphone type only with the permission, or Android refuses.
+            val mic = checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            val type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK or (if (mic) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0)
+            startForeground(ID, notification(), type)
+        } else if (Build.VERSION.SDK_INT >= 29) {
             startForeground(ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
         } else {
             startForeground(ID, notification())

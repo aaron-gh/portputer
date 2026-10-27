@@ -38,6 +38,7 @@ mod id {
     pub const CAPTURE: u16 = 303;
     pub const AUDIO: u16 = 304;
     pub const MUTE_SPEAKERS: u16 = 312;
+    pub const MIC: u16 = 313;
     pub const VOLUME: u16 = 305;
     pub const KEYS: u16 = 306;
     pub const TEXT: u16 = 307;
@@ -81,6 +82,7 @@ struct Controls {
     capture: HWND,
     audio: HWND,
     mute_speakers: HWND,
+    mic: HWND,
     volume_label: HWND,
     volume: HWND,
     keys: HWND,
@@ -267,6 +269,7 @@ impl App {
             capture: ui::checkbox(hwnd, "Send keyboard to computer (Control-Windows-Escape returns it)", id::CAPTURE),
             audio: ui::checkbox(hwnd, "Computer audio", id::AUDIO),
             mute_speakers: ui::checkbox(hwnd, "Mute computer speakers", id::MUTE_SPEAKERS),
+            mic: ui::checkbox(hwnd, "Send microphone", id::MIC),
             volume_label: l("Audio volume"),
             volume: ui::trackbar(hwnd, id::VOLUME),
             keys: ui::button(hwnd, "Keys and Shortcuts", id::KEYS),
@@ -309,7 +312,7 @@ impl App {
         f.row(&[(c.pair_label, 1)], h);
         f.row(&[(c.pair_code, 3), (c.pair, 1)], h + 2);
         f.row(&[(c.capture, 1)], h);
-        f.row(&[(c.audio, 1), (c.mute_speakers, 1)], h);
+        f.row(&[(c.audio, 1), (c.mute_speakers, 1), (c.mic, 1)], h);
         f.row(&[(c.volume_label, 1), (c.volume, 3)], 30);
         f.row(&[(c.keys, 1), (c.power, 1), (c.release_all, 1)], h + 4);
         f.row(&[(c.text_label, 1), (c.text, 3), (c.type_text, 1)], h + 2);
@@ -350,7 +353,7 @@ impl App {
         for h in [c.pair_label, c.pair_code, c.pair] {
             ui::show(h, untrusted);
         }
-        for h in [c.capture, c.audio, c.mute_speakers, c.volume_label, c.volume, c.keys, c.power, c.release_all, c.text_label, c.text, c.type_text] {
+        for h in [c.capture, c.audio, c.mute_speakers, c.mic, c.volume_label, c.volume, c.keys, c.power, c.release_all, c.text_label, c.text, c.type_text] {
             ui::show(h, info.as_ref().is_some_and(|i| i.trusted));
             ui::enable(h, trusted);
         }
@@ -359,6 +362,7 @@ impl App {
             ui::enable(c.audio, trusted && i.audio);
             ui::enable(c.volume, trusted && i.audio);
             ui::show(c.mute_speakers, i.trusted && i.audio && i.mute);
+            ui::show(c.mic, i.trusted && i.mic);
             ui::enable(c.power, trusted && !i.power.is_empty());
         }
         ui::set_checked(c.capture, self.capturing);
@@ -540,10 +544,15 @@ impl App {
                     self.audio_wanted = false;
                     self.refresh();
                 }
+                if code == "mic_failed" {
+                    ui::set_checked(self.c.mic, false);
+                }
                 self.say(&message);
             }
             SessionEvent::AudioStarted { .. } => self.say("Audio on."),
             SessionEvent::AudioStopped { .. } => {}
+            SessionEvent::MicStarted => self.say("Microphone on."),
+            SessionEvent::MicStopped { .. } => ui::set_checked(self.c.mic, false),
         }
     }
 
@@ -726,6 +735,11 @@ impl App {
             id::PAIR => self.pair(),
             id::CAPTURE => self.set_capturing(ui::checked(self.c.capture)),
             id::AUDIO => self.set_audio(ui::checked(self.c.audio)),
+            id::MIC => {
+                if let Some(s) = &self.session {
+                    if ui::checked(self.c.mic) { s.start_mic() } else { s.stop_mic() }
+                }
+            }
             id::MUTE_SPEAKERS => {
                 let muted = ui::checked(self.c.mute_speakers);
                 set_setting("mute_speakers", if muted { "1" } else { "0" });

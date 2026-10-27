@@ -28,6 +28,8 @@
 	<string>public.app-category.utilities</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Portputer sends this Mac's audio output to the connected device.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Portputer sends this Mac's microphone to the computer it controls.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Portputer accepts connections from paired devices on the local network and finds computers to connect to.</string>
 	<key>NSBonjourServices</key>

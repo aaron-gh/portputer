@@ -285,6 +285,8 @@ pub struct ServerInfo {
     pub audio: bool,
     /// The computer's speakers can be muted while it streams.
     pub mute: bool,
+    /// The computer offers this device's microphone to its apps.
+    pub mic: bool,
     pub host: String,
     pub port: u16,
     /// Paired both ways. Until it is, only `pair` does anything.
@@ -303,6 +305,7 @@ impl From<client::ServerInfo> for ServerInfo {
             power: i.power.into_iter().map(Power::from).collect(),
             audio: i.audio,
             mute: i.mute,
+            mic: i.mic,
             host: i.host,
             port: i.port,
             trusted: i.trusted,
@@ -319,6 +322,8 @@ pub trait SessionListener: Send + Sync {
     fn error(&self, code: String, message: String);
     fn audio_started(&self, sample_rate: u32);
     fn audio_stopped(&self, reason: String);
+    fn mic_started(&self);
+    fn mic_stopped(&self, reason: String);
 }
 
 struct Relay(Arc<dyn SessionListener>);
@@ -333,6 +338,8 @@ impl SessionObserver for Relay {
             SessionEvent::Error { code, message } => self.0.error(code, message),
             SessionEvent::AudioStarted { sample_rate } => self.0.audio_started(sample_rate),
             SessionEvent::AudioStopped { reason } => self.0.audio_stopped(reason),
+            SessionEvent::MicStarted => self.0.mic_started(),
+            SessionEvent::MicStopped { reason } => self.0.mic_stopped(reason),
         }
     }
 }
@@ -404,6 +411,15 @@ impl ClientSession {
 
     pub fn stop_audio(&self) {
         self.session.stop_audio();
+    }
+
+    /// Sends this device's microphone to the computer.
+    pub fn start_mic(&self) {
+        self.session.start_mic();
+    }
+
+    pub fn stop_mic(&self) {
+        self.session.stop_mic();
     }
 
     /// Keeps the sound from the computer's own speakers while it streams.
@@ -581,6 +597,15 @@ pub fn input_permission_detail() -> String {
     return portputer_core::platform::macos::input_permission_detail();
     #[cfg(not(target_os = "macos"))]
     String::new()
+}
+
+/// Whether the Portputer Microphone driver is installed (Mac).
+#[uniffi::export]
+pub fn microphone_driver_installed() -> bool {
+    #[cfg(target_os = "macos")]
+    return portputer_core::audio::feed::installed();
+    #[cfg(not(target_os = "macos"))]
+    false
 }
 
 /// Whether the helper daemon and the server at the login window are
