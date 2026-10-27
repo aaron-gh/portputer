@@ -1,0 +1,20 @@
+[package]
+name = "portputer-agent"
+description = "Portputer's headless server: the server at the Mac login window, and the helper daemon that restarts the computer."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "portputer-agent"
+path = "src/main.rs"
+
+[dependencies]
+portputer-core = { path = "../portputer-core" }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

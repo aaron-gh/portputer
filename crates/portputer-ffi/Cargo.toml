@@ -1,0 +1,26 @@
+[package]
+name = "portputer-ffi"
+description = "The bridge between Portputer's Rust core and its Swift and Kotlin apps, generated with UniFFI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib", "cdylib", "lib"]
+name = "portputer_ffi"
+
+[[bin]]
+# Generates the Swift and Kotlin bindings: see macos/build.sh and android/build-rust.sh.
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+[dependencies]
+portputer-core = { path = "../portputer-core" }
+thiserror = "2"
+uniffi = { version = "0.32", features = ["cli"] }
+tracing = { version = "0.1", features = ["log"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.15"
+log = "0.4"

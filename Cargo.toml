@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/portputer-core"]
+members = ["crates/portputer-core", "crates/portputer-ffi", "crates/portputer-agent"]
 
 [workspace.package]
 version = "0.1.0"

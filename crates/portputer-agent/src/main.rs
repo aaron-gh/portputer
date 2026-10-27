@@ -1,0 +1,107 @@
+//! portputer-agent: Portputer's server without a window.
+//!
+//!   portputer-agent serve [--login-window] [--store DIR] [--port N]
+//!       Runs a server. With --login-window it's the one launchd starts at
+//!       the Mac login window, before anyone logs in, with the identity and
+//!       paired devices the helper copied from the app.
+//!   portputer-agent helper
+//!       The root daemon: restarts and shuts down for the app, and copies its
+//!       pairings for the server at the login window.
+//!   portputer-agent install | uninstall
+//!       As root: puts the agent, the daemon and the login window agent in
+//!       place, or takes them away. The Mac app runs these with an
+//!       administrator's approval.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use portputer_core::protocol::{DEFAULT_PORT, LOGIN_WINDOW_PORT, SessionKind};
+use portputer_core::server::{Server, ServerConfig, ServerEvent, ServerObserver};
+
+#[cfg(target_os = "macos")]
+mod helper;
+#[cfg(target_os = "macos")]
+mod install;
+
+struct Log;
+
+impl ServerObserver for Log {
+    fn event(&self, event: ServerEvent) {
+        tracing::info!("{event:?}");
+    }
+}
+
+fn usage() -> ! {
+    eprintln!("usage: portputer-agent serve [--login-window] [--store DIR] [--port N] | helper | install | uninstall");
+    std::process::exit(2)
+}
+
+fn default_store(login_window: bool) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    if login_window {
+        return PathBuf::from(portputer_core::platform::macos::SYSTEM_STORE);
+    }
+    let _ = login_window;
+    if cfg!(target_os = "macos") {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        PathBuf::from(home).join("Library/Application Support/Portputer/server")
+    } else if cfg!(windows) {
+        let base = std::env::var("ProgramData").unwrap_or_else(|_| "C:\\ProgramData".into());
+        PathBuf::from(base).join("Portputer").join("server")
+    } else {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        PathBuf::from(home).join(".local/share/portputer/server")
+    }
+}
+
+fn serve(args: &[String]) {
+    let mut login_window = false;
+    let mut store = None;
+    let mut port = None;
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--login-window" => login_window = true,
+            "--store" => store = it.next().map(PathBuf::from),
+            "--port" => port = it.next().and_then(|p| p.parse().ok()),
+            _ => usage(),
+        }
+    }
+    let session = if login_window { SessionKind::LoginWindow } else { SessionKind::User };
+    let store_dir = store.unwrap_or_else(|| default_store(login_window));
+    let port = port.unwrap_or(if login_window { LOGIN_WINDOW_PORT } else { DEFAULT_PORT });
+    let name = portputer_core::discovery::computer_name();
+    let server = match Server::start(ServerConfig { store_dir: store_dir.clone(), session, port, name, observer: Some(Arc::new(Log)) }) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("can't start: {e}");
+            std::process::exit(1);
+        }
+    };
+    tracing::info!("serving {} on port {} from {}", server.id(), server.port(), store_dir.display());
+    if std::env::var_os("PORTPUTER_PAIR").is_some() {
+        // For testing without the app: prints a pairing code.
+        println!("Pairing code: {}", server.new_pairing_code());
+    }
+    loop {
+        std::thread::park();
+    }
+}
+
+fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .with_writer(std::io::stderr)
+        .init();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        Some("serve") => serve(&args[1..]),
+        #[cfg(target_os = "macos")]
+        Some("helper") => helper::run(),
+        #[cfg(target_os = "macos")]
+        Some("install") => install::install(),
+        #[cfg(target_os = "macos")]
+        Some("uninstall") => install::uninstall(),
+        _ => usage(),
+    }
+}
