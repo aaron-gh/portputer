@@ -13,6 +13,10 @@ CARGO="${CARGO:-$(command -v cargo || echo "$HOME/.cargo/bin/cargo")}"
 RUSTUP="${RUSTUP:-$(command -v rustup || echo "$HOME/.cargo/bin/rustup")}"
 TARGET=x86_64-pc-windows-gnu
 
+# Homebrew's bin, for shells that don't have it on their path.
+for dir in /opt/homebrew/bin /usr/local/bin; do
+    [[ -d "$dir" && ":$PATH:" != *":$dir:"* ]] && PATH="$PATH:$dir"
+done
 if ! command -v x86_64-w64-mingw32-gcc >/dev/null; then
     echo "MinGW-w64 is needed to build for Windows. Install it with: brew install mingw-w64" >&2
     exit 1
