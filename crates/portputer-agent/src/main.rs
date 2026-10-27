@@ -136,7 +136,13 @@ fn main() {
         #[cfg(target_os = "macos")]
         Some("probe-audio") => println!("{}", portputer_core::audio::feed::probe()),
         #[cfg(target_os = "macos")]
-        Some("inject") => portputer_core::platform::macos::run_injector(args.iter().any(|a| a == "--no-source")),
+        Some("inject") => {
+            let number = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).and_then(|n| n.parse().ok());
+            match number("--probe") {
+                Some(n) => println!("{}", portputer_core::platform::macos::probe_strategy(n)),
+                None => portputer_core::platform::macos::run_injector(number("--strategy").unwrap_or(0)),
+            }
+        }
         #[cfg(target_os = "macos")]
         Some("posting-probe") => println!("{}", portputer_core::platform::macos::posting_probe()),
         #[cfg(target_os = "macos")]

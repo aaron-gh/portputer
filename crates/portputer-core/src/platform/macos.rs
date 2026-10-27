@@ -26,6 +26,7 @@ pub const SYSTEM_STORE: &str = "/Library/Application Support/Portputer/server";
 
 pub struct MacInjector {
     source: Option<CFRetained<CGEventSource>>,
+    tap: CGEventTapLocation,
     held: Held,
     flags: CGEventFlags,
     session: SessionKind,
@@ -33,13 +34,15 @@ pub struct MacInjector {
 
 impl MacInjector {
     pub fn new(session: SessionKind) -> MacInjector {
-        MacInjector::with_source(session, true)
+        MacInjector::with_strategy(session, &STRATEGIES[0])
     }
 
-    /// Without an event source, events are made with none.
-    pub fn with_source(session: SessionKind, source: bool) -> MacInjector {
+    /// With an event source and posting point other than the usual (for the
+    /// login window: see [`STRATEGIES`]).
+    pub fn with_strategy(session: SessionKind, strategy: &Strategy) -> MacInjector {
         MacInjector {
-            source: if source { CGEventSource::new(CGEventSourceStateID::HIDSystemState) } else { None },
+            source: strategy.source.and_then(CGEventSource::new),
+            tap: strategy.tap,
             held: Held::default(),
             flags: CGEventFlags::empty(),
             session,
@@ -92,7 +95,7 @@ impl MacInjector {
         if repeat {
             CGEvent::set_integer_value_field(Some(&event), CGEventField::KeyboardEventAutorepeat, 1);
         }
-        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
+        CGEvent::post(self.tap, Some(&event));
     }
 
     /// Posts a media, brightness or eject key the way Apple keyboards do.
@@ -111,7 +114,7 @@ impl MacInjector {
             -1,
         );
         if let Some(cg) = event.and_then(|e| e.CGEvent()) {
-            CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&cg));
+            CGEvent::post(self.tap, Some(&cg));
         }
     }
 }
@@ -146,7 +149,7 @@ impl Injector for MacInjector {
                 let Some(event) = CGEvent::new_keyboard_event(self.source.as_deref(), 0, down) else { continue };
                 CGEvent::set_flags(Some(&event), CGEventFlags::empty());
                 unsafe { CGEvent::keyboard_set_unicode_string(Some(&event), chunk.len() as _, chunk.as_ptr()) };
-                CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
+                CGEvent::post(self.tap, Some(&event));
             }
             std::thread::sleep(Duration::from_millis(2));
         }
@@ -178,6 +181,40 @@ unsafe extern "C" {
     fn AXIsProcessTrusted() -> bool;
 }
 
+/// How keys are made and posted: the event source they're made with, and
+/// where they enter the event stream.
+pub struct Strategy {
+    pub name: &'static str,
+    pub source: Option<CGEventSourceStateID>,
+    pub tap: CGEventTapLocation,
+}
+
+/// The first is the usual one. At the login window, making events with the
+/// HID system state's source can hang inside SkyLight, and events made with
+/// none appear to be dropped, so the key process tries each of these there
+/// and uses the first that macOS registers.
+pub const STRATEGIES: [Strategy; 6] = [
+    Strategy { name: "HID system source, HID tap", source: Some(CGEventSourceStateID::HIDSystemState), tap: CGEventTapLocation::HIDEventTap },
+    Strategy { name: "private source, HID tap", source: Some(CGEventSourceStateID::Private), tap: CGEventTapLocation::HIDEventTap },
+    Strategy { name: "combined session source, HID tap", source: Some(CGEventSourceStateID::CombinedSessionState), tap: CGEventTapLocation::HIDEventTap },
+    Strategy { name: "private source, session tap", source: Some(CGEventSourceStateID::Private), tap: CGEventTapLocation::SessionEventTap },
+    Strategy { name: "no source, session tap", source: None, tap: CGEventTapLocation::SessionEventTap },
+    Strategy { name: "no source, HID tap", source: None, tap: CGEventTapLocation::HIDEventTap },
+];
+
+/// Whether a strategy's keys register here: Shift goes down, the HID and
+/// session states are read, and Shift goes up.
+pub fn probe_strategy(index: usize) -> String {
+    let Some(strategy) = STRATEGIES.get(index) else { return "no such strategy".into() };
+    let mut injector = MacInjector::with_strategy(SessionKind::LoginWindow, strategy);
+    injector.post_code("ShiftLeft", 56, true);
+    std::thread::sleep(Duration::from_millis(60));
+    let hid = CGEventSource::key_state(CGEventSourceStateID::HIDSystemState, 56);
+    let session = CGEventSource::key_state(CGEventSourceStateID::CombinedSessionState, 56);
+    injector.post_code("ShiftLeft", 56, false);
+    format!("hid={hid} session={session}")
+}
+
 /// A key command for the key process at the login window, one JSON line
 /// each; it answers each with a line once it's done.
 #[derive(Serialize, Deserialize, Debug)]
@@ -192,44 +229,89 @@ pub enum InjectCommand {
 
 /// Keys at the login window, through a child process (`portputer-agent
 /// inject`). There, making a key event can hang for good inside SkyLight
-/// (CGSEventSourceForID waits on a lock it holds itself), which would stop
-/// every key after it. A key that isn't done within 1.5 seconds has the
-/// process replaced, alternating between making events with an event source
-/// and without, and is sent once more.
+/// (CGSEventSourceForID waits on a lock it holds itself), and some ways of
+/// posting are dropped. Before the first key, each of [`STRATEGIES`] is
+/// tried in a process of its own (`inject --probe N`, 1.5 seconds each) and
+/// the first that macOS registers is used; a key that isn't done within 1.5
+/// seconds has the process replaced with the next strategy, and is sent once
+/// more.
 pub struct ChildInjector {
     child: Option<std::process::Child>,
     stdin: Option<std::process::ChildStdin>,
-    acks: Option<std::sync::mpsc::Receiver<()>>,
-    without_source: bool,
+    acks: Option<std::sync::mpsc::Receiver<String>>,
+    strategy: Option<usize>,
+}
+
+/// Runs `portputer-agent inject <args>` with its output lines on a channel.
+fn spawn_injector(args: &[String]) -> Option<(std::process::Child, std::sync::mpsc::Receiver<String>)> {
+    let exe = std::env::current_exe().ok()?;
+    let mut child = std::process::Command::new(exe)
+        .arg("inject")
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .ok()?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let out = child.stdout.take()?;
+    std::thread::spawn(move || {
+        for line in BufReader::new(out).lines() {
+            let Ok(line) = line else { break };
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    Some((child, rx))
 }
 
 impl ChildInjector {
     pub fn new() -> ChildInjector {
-        ChildInjector { child: None, stdin: None, acks: None, without_source: false }
+        ChildInjector { child: None, stdin: None, acks: None, strategy: None }
+    }
+
+    /// Tries each strategy in a process of its own; the first macOS
+    /// registers, or else the first that didn't hang.
+    fn choose(&mut self) -> usize {
+        let mut chosen = None;
+        let mut returned = None;
+        for i in 0..STRATEGIES.len() {
+            let result = match spawn_injector(&["--probe".into(), i.to_string()]) {
+                Some((mut child, rx)) => {
+                    let line = rx.recv_timeout(Duration::from_millis(1500)).unwrap_or_else(|_| "didn't return".into());
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    line
+                }
+                None => "couldn't start".into(),
+            };
+            tracing::info!("key strategy {i} ({}): {result}", STRATEGIES[i].name);
+            if chosen.is_none() && result.contains("=true") {
+                chosen = Some(i);
+            }
+            if returned.is_none() && result.starts_with("hid=") {
+                returned = Some(i);
+            }
+        }
+        // None registered: the first that didn't hang.
+        let chosen = chosen.or(returned).unwrap_or(STRATEGIES.len() - 1);
+        tracing::info!("keys at the login window use strategy {chosen} ({})", STRATEGIES[chosen].name);
+        chosen
     }
 
     fn start(&mut self) -> bool {
-        let Ok(exe) = std::env::current_exe() else { return false };
-        let mut command = std::process::Command::new(exe);
-        command.arg("inject");
-        if self.without_source {
-            command.arg("--no-source");
-        }
-        let child = command.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn();
-        let Ok(mut child) = child else {
+        let strategy = match self.strategy {
+            Some(s) => s,
+            None => {
+                let s = self.choose();
+                self.strategy = Some(s);
+                s
+            }
+        };
+        let Some((mut child, rx)) = spawn_injector(&["--strategy".into(), strategy.to_string()]) else {
             tracing::warn!("couldn't start the key process");
             return false;
         };
-        let (tx, rx) = std::sync::mpsc::channel();
-        if let Some(out) = child.stdout.take() {
-            std::thread::spawn(move || {
-                for line in BufReader::new(out).lines() {
-                    if line.is_err() || tx.send(()).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
         self.stdin = child.stdin.take();
         self.acks = Some(rx);
         self.child = Some(child);
@@ -258,8 +340,9 @@ impl ChildInjector {
                 return true;
             }
             self.stop();
-            self.without_source = !self.without_source;
-            tracing::warn!("a key didn't go through; the key process starts again, making events {}", if self.without_source { "without an event source" } else { "with an event source" });
+            let next = (self.strategy.unwrap_or(0) + 1) % STRATEGIES.len();
+            self.strategy = Some(next);
+            tracing::warn!("a key didn't go through; the key process starts again with strategy {next} ({})", STRATEGIES[next].name);
         }
         false
     }
@@ -302,8 +385,9 @@ impl Injector for ChildInjector {
 }
 
 /// The key process: commands on standard input, a line back for each.
-pub fn run_injector(without_source: bool) {
-    let mut injector = MacInjector::with_source(SessionKind::LoginWindow, !without_source);
+pub fn run_injector(strategy: usize) {
+    let strategy = STRATEGIES.get(strategy).unwrap_or(&STRATEGIES[0]);
+    let mut injector = MacInjector::with_strategy(SessionKind::LoginWindow, strategy);
     let mut out = std::io::stdout();
     for line in BufReader::new(std::io::stdin()).lines() {
         let Ok(line) = line else { break };
