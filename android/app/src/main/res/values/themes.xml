@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Portputer" parent="@android:style/Theme.Material.Light.NoActionBar" />
+
+    <style name="Heading" parent="@android:style/TextAppearance.Material.Title">
+        <item name="android:paddingTop">16dp</item>
+        <item name="android:paddingBottom">8dp</item>
+    </style>
+
+    <style name="Row">
+        <item name="android:minHeight">56dp</item>
+        <item name="android:paddingStart">16dp</item>
+        <item name="android:paddingEnd">8dp</item>
+        <item name="android:background">?android:attr/selectableItemBackground</item>
+    </style>
+</resources>

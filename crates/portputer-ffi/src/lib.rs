@@ -14,8 +14,10 @@ use portputer_core::server::{Server, ServerConfig, ServerEvent, ServerObserver};
 
 uniffi::setup_scaffolding!();
 
-/// Every error, as a sentence to show or read aloud.
+/// Every error, as a sentence to show or read aloud: the bindings' exception
+/// message.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
+#[uniffi(flat_error)]
 pub enum PortputerError {
     #[error("{message}")]
     Failed { message: String },
@@ -419,7 +421,9 @@ impl ClientSession {
         })
     }
 
-    pub fn close(&self) {
+    /// Ends the session. (Not `close`, which the Kotlin bindings use to free
+    /// the object.)
+    pub fn disconnect(&self) {
         self.session.close();
     }
 }

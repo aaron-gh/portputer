@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Portputer</string>
+
+    <!-- Keyboard accessibility service -->
+    <string name="keyboard_service_label">Portputer Keyboard</string>
+    <string name="keyboard_service_summary">Sends external keyboard input to the connected computer.</string>
+    <string name="keyboard_service_description">While Send Keyboard to Computer is on, key events from external keyboards go to the connected computer instead of this device. The release shortcut switches it off. This service doesn\'t read screen content.</string>
+
+    <!-- Computers -->
+    <string name="computers_heading">Computers</string>
+    <string name="computers_empty">No computers found. Portputer must be running on the computer, on the same network. Add Computer by Address connects to one on another network.</string>
+    <string name="add_by_address">Add Computer by Address</string>
+    <string name="settings">Settings</string>
+    <string name="keyboard_off">Portputer Keyboard is off: keys from an external keyboard stay on this device.</string>
+    <string name="open_accessibility_settings">Open Accessibility Settings</string>
+    <string name="wake">Wake</string>
+    <string name="forget">Forget</string>
+    <string name="connect">Connect</string>
+    <string name="status_available">available</string>
+    <string name="status_available_user">%1$s logged in</string>
+    <string name="status_login_window">at the login window</string>
+    <string name="status_offline">not on the network</string>
+    <string name="status_not_paired">not paired</string>
+    <string name="status_connected">connected</string>
+    <string name="os_mac">Mac</string>
+    <string name="os_windows">Windows</string>
+    <string name="os_other">Computer</string>
+    <string name="wake_sent">Wake on LAN packet sent to %1$s.</string>
+    <string name="wake_failed">Wake on LAN packet not sent.</string>
+    <string name="forget_title">Forget %1$s?</string>
+    <string name="forget_message">Pairing again needs a new code from the computer.</string>
+    <string name="forgotten">%1$s forgotten.</string>
+    <string name="address_title">Add Computer by Address</string>
+    <string name="address_host">Host name or IP address</string>
+    <string name="address_port">Port</string>
+    <string name="not_connected">Not connected.</string>
+    <string name="cancel">Cancel</string>
+    <string name="ok">OK</string>
+
+    <!-- Connected -->
+    <string name="connecting">Connecting to %1$s.</string>
+    <string name="connected_user">Connected to %1$s, %2$s logged in.</string>
+    <string name="connected_nobody">Connected to %1$s.</string>
+    <string name="connected_login_window">Connected to %1$s at the login window.</string>
+    <string name="reconnecting">Connection to %1$s lost. Reconnecting.</string>
+    <string name="closed">Disconnected from %1$s. %2$s</string>
+    <string name="connect_failed">Couldn\'t connect to %1$s. %2$s</string>
+    <string name="pair_heading">Pairing</string>
+    <string name="pair_instructions">On %1$s, open Portputer and choose Pair New Device. Enter the code it shows.</string>
+    <string name="pair_code">Pairing code</string>
+    <string name="pair">Pair</string>
+    <string name="pairing">Pairing.</string>
+    <string name="paired">Paired with %1$s.</string>
+    <string name="pair_failed">Pairing failed. %1$s</string>
+    <string name="capture_switch">Send Keyboard to Computer</string>
+    <string name="capture_on">Keys from the external keyboard go to %1$s. %2$s switches back to this device.</string>
+    <string name="capture_off">Keys from the external keyboard stay on this device. %1$s sends them to %2$s.</string>
+    <string name="capture_toast_on">Keyboard to %1$s</string>
+    <string name="capture_toast_off">Keyboard to phone</string>
+    <string name="audio_switch">Computer Audio</string>
+    <string name="audio_volume">Audio volume</string>
+    <string name="audio_unavailable">This computer doesn\'t send audio.</string>
+    <string name="audio_started">Audio on.</string>
+    <string name="audio_stopped">Audio off.</string>
+    <string name="keys_button">Keys and Shortcuts</string>
+    <string name="text_button">Type Text</string>
+    <string name="power_button">Power</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="back_to_computers">Back to Computers</string>
+    <string name="text_title">Type Text on %1$s</string>
+    <string name="text_field">Text</string>
+    <string name="text_send">Type</string>
+    <string name="text_sent">Text typed.</string>
+    <string name="notification_channel">Connection</string>
+    <string name="notification_connected">Connected to %1$s</string>
+    <string name="notification_reconnecting">Reconnecting to %1$s</string>
+    <string name="notification_capture_on">Keyboard to computer</string>
+    <string name="notification_capture_off">Keyboard to phone</string>
+    <string name="notification_toggle_on">Keyboard to Computer</string>
+    <string name="notification_toggle_off">Keyboard to Phone</string>
+
+    <!-- Keys -->
+    <string name="keys_title">Keys and Shortcuts</string>
+    <string name="keys_target">Keys go to %1$s.</string>
+    <string name="release_all">Release All Keys</string>
+    <string name="released_all">All keys released.</string>
+    <string name="hold">Hold</string>
+    <string name="release">Release</string>
+    <string name="held">held</string>
+    <string name="key_pressed">%1$s pressed.</string>
+    <string name="key_held">%1$s held.</string>
+    <string name="key_released">%1$s released.</string>
+
+    <!-- Power -->
+    <string name="power_title">Power</string>
+    <string name="power_restart">Restart</string>
+    <string name="power_shutdown">Shut Down</string>
+    <string name="power_sleep">Sleep</string>
+    <string name="power_log_out">Log Out</string>
+    <string name="power_lock">Lock Screen</string>
+    <string name="power_force_restart">Force Restart</string>
+    <string name="power_unlocked_restart_mac">Restart Without FileVault Unlock</string>
+    <string name="power_unlocked_restart">Restart Without Disk Unlock</string>
+    <string name="power_restart_help">Apps are asked to quit. One with unsaved changes can stop the restart.</string>
+    <string name="power_force_restart_help">Restarts immediately. Unsaved changes are lost.</string>
+    <string name="power_unlocked_help">Restarts immediately, once, without the FileVault unlock screen, so the computer starts up to the login window and Portputer reconnects. Needs the password of a FileVault user.</string>
+    <string name="power_confirm">%1$s %2$s?</string>
+    <string name="power_sent">%1$s sent to %2$s.</string>
+    <string name="power_none">No power actions available on this computer.</string>
+    <string name="power_user">User name</string>
+    <string name="power_password">Password</string>
+    <string name="power_no_system_components">Force Restart and Restart Without FileVault Unlock need Portputer\'s system components, installed from Portputer on the Mac.</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_device_name">Device name shown on computers</string>
+    <string name="settings_mapping">Key mapping</string>
+    <string name="settings_mapping_position">By key position: the computer\'s keyboard layout applies</string>
+    <string name="settings_mapping_layout">By this device\'s keyboard layout</string>
+    <string name="settings_release">Release shortcut</string>
+    <string name="settings_buffer">Audio buffer</string>
+    <string name="settings_buffer_ms">%1$d ms</string>
+    <string name="settings_buffer_help">A larger buffer has fewer dropouts on a busy network and more delay.</string>
+    <string name="settings_capture_on_connect">Send keyboard to computer on connect</string>
+    <string name="settings_audio_on_connect">Computer audio on connect</string>
+    <string name="settings_builtin_keyboards">Include built-in keyboards</string>
+    <string name="settings_builtin_help">For devices with a hardware keyboard. The device\'s own buttons, such as volume, always stay on the device.</string>
+    <string name="settings_haptics">Vibrate when the keyboard switches</string>
+
+    <string name="release_ctrl_alt_shift_esc">Control-Alt-Shift-Escape</string>
+    <string name="release_meta_esc">Meta-Escape</string>
+    <string name="release_ctrl_shift_f12">Control-Shift-F12</string>
+    <string name="release_scroll_lock">Scroll Lock</string>
+    <string name="release_pause">Pause</string>
+</resources>

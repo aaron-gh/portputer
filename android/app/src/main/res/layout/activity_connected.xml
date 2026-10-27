@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <include layout="@layout/toolbar" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:id="@+id/status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:accessibilityLiveRegion="polite"
+                android:paddingBottom="8dp"
+                android:textAppearance="@android:style/TextAppearance.Material.Subhead" />
+
+            <TextView
+                android:id="@+id/message"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:accessibilityLiveRegion="polite"
+                android:paddingBottom="8dp"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:id="@+id/pair_section"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <TextView
+                    style="@style/Heading"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:accessibilityHeading="true"
+                    android:text="@string/pair_heading" />
+
+                <TextView
+                    android:id="@+id/pair_instructions"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content" />
+
+                <TextView
+                    android:id="@+id/pair_code_label"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:labelFor="@+id/pair_code"
+                    android:paddingTop="8dp"
+                    android:text="@string/pair_code" />
+
+                <EditText
+                    android:id="@+id/pair_code"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:importantForAutofill="no"
+                    android:inputType="textCapCharacters|textNoSuggestions|textVisiblePassword"
+                    android:imeOptions="actionDone"
+                    android:maxLength="20" />
+
+                <Button
+                    android:id="@+id/pair"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/pair" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/controls"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <Switch
+                    android:id="@+id/capture"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:text="@string/capture_switch" />
+
+                <TextView
+                    android:id="@+id/capture_help"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingBottom="8dp" />
+
+                <LinearLayout
+                    android:id="@+id/keyboard_off_section"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/keyboard_off" />
+
+                    <Button
+                        android:id="@+id/open_accessibility"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/open_accessibility_settings" />
+                </LinearLayout>
+
+                <Switch
+                    android:id="@+id/audio"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:text="@string/audio_switch" />
+
+                <TextView
+                    android:id="@+id/volume_label"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:labelFor="@+id/volume"
+                    android:paddingTop="8dp"
+                    android:text="@string/audio_volume" />
+
+                <SeekBar
+                    android:id="@+id/volume"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:max="100" />
+
+                <Button
+                    android:id="@+id/keys"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/keys_button" />
+
+                <Button
+                    android:id="@+id/text"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/text_button" />
+
+                <Button
+                    android:id="@+id/power"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/power_button" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/disconnect"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/disconnect" />
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

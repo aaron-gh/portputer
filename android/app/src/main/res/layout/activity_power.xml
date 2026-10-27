@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <include layout="@layout/toolbar" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:id="@+id/status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:accessibilityLiveRegion="polite"
+                android:paddingBottom="8dp" />
+
+            <Button
+                android:id="@+id/restart"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/power_restart" />
+
+            <TextView
+                android:id="@+id/restart_help"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingBottom="8dp"
+                android:text="@string/power_restart_help" />
+
+            <Button
+                android:id="@+id/shutdown"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/power_shutdown" />
+
+            <Button
+                android:id="@+id/sleep"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/power_sleep" />
+
+            <Button
+                android:id="@+id/lock"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/power_lock" />
+
+            <Button
+                android:id="@+id/log_out"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/power_log_out" />
+
+            <Button
+                android:id="@+id/force_restart"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/power_force_restart" />
+
+            <TextView
+                android:id="@+id/force_restart_help"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingBottom="8dp"
+                android:text="@string/power_force_restart_help" />
+
+            <Button
+                android:id="@+id/unlocked_restart"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/power_unlocked_restart_mac" />
+
+            <TextView
+                android:id="@+id/unlocked_restart_help"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingBottom="8dp"
+                android:text="@string/power_unlocked_help" />
+
+            <TextView
+                android:id="@+id/no_system_components"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="8dp"
+                android:text="@string/power_no_system_components"
+                android:visibility="gone" />
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>
