@@ -240,6 +240,9 @@ fn through_relay() {
 
     // Reachable directly while it still knows the addresses.
     assert!(matches!(portputer_core::client::probe(&client_dir, &server.id()), portputer_core::client::Reachability::Direct { .. }));
+    unsafe {
+        std::env::set_var("PORTPUTER_STAY_ON_RELAY", "1");
+    }
     // No usable address: only the relay. The client forgets every address
     // the computer told it of.
     let forget_addresses = || {
@@ -265,6 +268,26 @@ fn through_relay() {
     let stats = relayed.audio_stats().expect("audio through the relay");
     assert!(stats.received > 100, "{stats:?}");
     relayed.close();
+    std::thread::sleep(Duration::from_millis(200));
+
+    // Let go of the relay, and a relayed connection moves to a direct address
+    // as soon as it learns one.
+    unsafe {
+        std::env::remove_var("PORTPUTER_STAY_ON_RELAY");
+    }
+    forget_addresses();
+    let moving = Session::connect("127.0.0.1", 1, Some(server.id()), config()).unwrap();
+    assert!(moving.info().unwrap().via_relay);
+    let mut moved = false;
+    for _ in 0..50 {
+        std::thread::sleep(Duration::from_millis(100));
+        if moving.info().is_some_and(|i| !i.via_relay && i.trusted) {
+            moved = true;
+            break;
+        }
+    }
+    assert!(moved, "moved off the relay: {:?}", moving.info());
+    moving.close();
     std::thread::sleep(Duration::from_millis(200));
 
     // A made-up token for the right room is refused like a room that isn't there.

@@ -477,6 +477,9 @@ enum Ended {
     Closed,
     Lost(String),
     Refused(String),
+    /// A direct connection to the same computer, to use in place of the
+    /// relayed one.
+    Switch(Box<Conn>),
 }
 
 impl Supervisor {
@@ -498,6 +501,11 @@ impl Supervisor {
                 Ended::Refused(reason) => {
                     self.emit(SessionEvent::State(SessionState::Closed { reason }));
                     return;
+                }
+                Ended::Switch(direct) => {
+                    tracing::info!("moved from the relay to {}", direct.info.host);
+                    conn = *direct;
+                    continue;
                 }
                 Ended::Lost(reason) => {
                     tracing::info!("connection lost: {reason}");
@@ -623,6 +631,11 @@ impl Supervisor {
         let mut mic: Option<MicSender> = None;
         let mut pending_pair: Option<(String, std::sync::mpsc::Sender<Result<(), String>>)> = None;
         let mut ping = tokio::time::interval(PING_EVERY);
+        // Through the relay, the computer's direct addresses are tried now
+        // and then, and the connection moves to one that answers.
+        let (upgrade_tx, mut upgrade_rx) = mpsc::channel::<Conn>(1);
+        let mut upgrade: Option<tokio::task::JoinHandle<()>> = None;
+        let mut upgrade_timer = tokio::time::interval(Duration::from_secs(60));
         let mut last_heard = Instant::now();
         let mut n = 0u64;
         if info.trusted && self.audio_wanted {
@@ -774,6 +787,9 @@ impl Supervisor {
                         ServerMessage::Addresses { addresses, port } => {
                             if info.trusted {
                                 let _ = self.store.update(&info.id, |s| remember_addresses(s, &addresses, port));
+                                if info.via_relay && upgrade.as_ref().is_none_or(|t| t.is_finished()) {
+                                    upgrade = Some(self.try_direct(&info, upgrade_tx.clone()));
+                                }
                             }
                         }
                         ServerMessage::Relay { url, room, token } => {
@@ -814,6 +830,12 @@ impl Supervisor {
                         ServerMessage::Pong { .. } | ServerMessage::Welcome { .. } => {}
                     }
                 }
+                Some(direct) = upgrade_rx.recv() => break Ended::Switch(Box::new(direct)),
+                _ = upgrade_timer.tick(), if info.via_relay && info.trusted => {
+                    if upgrade.as_ref().is_none_or(|t| t.is_finished()) {
+                        upgrade = Some(self.try_direct(&info, upgrade_tx.clone()));
+                    }
+                }
                 _ = ping.tick() => {
                     if last_heard.elapsed() > SILENCE_LIMIT {
                         break Ended::Lost("the computer stopped responding".into());
@@ -827,6 +849,9 @@ impl Supervisor {
         };
         if let Some((_, reply)) = pending_pair.take() {
             let _ = reply.send(Err("The connection closed.".into()));
+        }
+        if let Some(t) = upgrade.take() {
+            t.abort();
         }
         if mic.take().is_some() {
             self.emit(SessionEvent::MicStopped { reason: "disconnected".into() });
@@ -890,6 +915,29 @@ impl Supervisor {
         let playback = audio::start_playback(jitter.clone())?;
         *self.inner.jitter.lock().unwrap() = Some(jitter);
         Ok(AudioReceiver { stop, _playback: playback, task: None })
+    }
+
+    /// Tries the computer's direct addresses in the background; a trusted
+    /// connection that answers is sent on `found`.
+    fn try_direct(&self, info: &ServerInfo, found: mpsc::Sender<Conn>) -> tokio::task::JoinHandle<()> {
+        let addresses: Vec<(String, u16)> = self
+            .candidates(info)
+            .into_iter()
+            .filter_map(|e| if let Endpoint::Tcp(h, p) = e { Some((h, p)) } else { None })
+            .collect();
+        let (id, identity, name, store_dir) = (info.id.clone(), self.identity.clone(), self.name.clone(), self.inner.store_dir.clone());
+        // PORTPUTER_STAY_ON_RELAY keeps tests on the relay.
+        let stay = std::env::var_os("PORTPUTER_STAY_ON_RELAY").is_some();
+        tokio::spawn(async move {
+            if addresses.is_empty() || stay {
+                return;
+            }
+            if let Ok(conn) = connect_direct(addresses, Some(id), identity, name, store_dir).await {
+                if conn.info.trusted {
+                    let _ = found.send(conn).await;
+                }
+            }
+        })
     }
 
     /// The relay this server is reached through.
