@@ -50,38 +50,52 @@ pub fn start_capture(on_audio: impl FnMut(&[f32], usize) + Send + 'static) -> Re
             let config = supported.config();
             let (rate, channels) = (config.sample_rate, config.channels);
             let ch = channels as usize;
-            let mut on_audio = on_audio;
-            let err = |e| tracing::warn!("capture: {e}");
-            let stream = match supported.sample_format() {
-                cpal::SampleFormat::I16 => {
-                    let mut buf = Vec::new();
-                    device.build_input_stream::<i16, _, _>(
-                        config,
-                        move |data, _| {
-                            buf.clear();
-                            buf.extend(data.iter().map(|s| *s as f32 / 32768.0));
-                            on_audio(&buf, ch);
-                        },
-                        err,
-                        None,
-                    )
+            let on_audio = Arc::new(Mutex::new(on_audio));
+            let build = |config: cpal::StreamConfig| {
+                let on_audio = on_audio.clone();
+                let err = |e| tracing::warn!("capture: {e}");
+                match supported.sample_format() {
+                    cpal::SampleFormat::I16 => {
+                        let mut buf = Vec::new();
+                        device.build_input_stream::<i16, _, _>(
+                            config,
+                            move |data, _| {
+                                buf.clear();
+                                buf.extend(data.iter().map(|s| *s as f32 / 32768.0));
+                                (on_audio.lock().unwrap())(&buf, ch);
+                            },
+                            err,
+                            None,
+                        )
+                    }
+                    cpal::SampleFormat::I32 => {
+                        let mut buf = Vec::new();
+                        device.build_input_stream::<i32, _, _>(
+                            config,
+                            move |data, _| {
+                                buf.clear();
+                                buf.extend(data.iter().map(|s| *s as f32 / 2147483648.0));
+                                (on_audio.lock().unwrap())(&buf, ch);
+                            },
+                            err,
+                            None,
+                        )
+                    }
+                    _ => device.build_input_stream::<f32, _, _>(config, move |data, _| (on_audio.lock().unwrap())(data, ch), err, None),
                 }
-                cpal::SampleFormat::I32 => {
-                    let mut buf = Vec::new();
-                    device.build_input_stream::<i32, _, _>(
-                        config,
-                        move |data, _| {
-                            buf.clear();
-                            buf.extend(data.iter().map(|s| *s as f32 / 2147483648.0));
-                            on_audio(&buf, ch);
-                        },
-                        err,
-                        None,
-                    )
+            };
+            // 5 ms device buffers, the packet size, where the device takes
+            // them; its default otherwise.
+            let small = match supported.buffer_size() {
+                cpal::SupportedBufferSize::Range { min, max } => {
+                    Some(cpal::StreamConfig { buffer_size: cpal::BufferSize::Fixed((rate / 200).clamp(*min, *max)), ..config.clone() })
                 }
-                _ => device.build_input_stream::<f32, _, _>(config, move |data, _| on_audio(data, ch), err, None),
-            }
-            .map_err(|e| e.to_string())?;
+                _ => None,
+            };
+            let stream = match small.map(&build) {
+                Some(Ok(stream)) => stream,
+                _ => build(config).map_err(|e| e.to_string())?,
+            };
             stream.play().map_err(|e| e.to_string())?;
             Ok((stream, rate, channels))
         };
@@ -232,7 +246,9 @@ pub fn start_playback_on(buffer: Arc<Mutex<JitterBuffer>>, _device_name: Option<
                 .map_err(|e| e.to_string())?
                 .direction(AudioDirection::Output)
                 .performance_mode(AudioPerformanceMode::LowLatency)
-                .sharing_mode(AudioSharingMode::Shared)
+                // Exclusive (MMAP) where the device has it; AAudio opens a
+                // shared stream otherwise.
+                .sharing_mode(AudioSharingMode::Exclusive)
                 .format(AudioFormat::PCM_Float)
                 .channel_count(2)
                 .sample_rate(rate as i32)
@@ -249,6 +265,8 @@ pub fn start_playback_on(buffer: Arc<Mutex<JitterBuffer>>, _device_name: Option<
                 }))
                 .open_stream()
                 .map_err(|e| e.to_string())?;
+            // Two bursts: the smallest buffer that doesn't glitch.
+            let _ = stream.set_buffer_size_in_frames(stream.frames_per_burst() * 2);
             stream.request_start().map_err(|e| e.to_string())?;
             Ok(stream)
         };

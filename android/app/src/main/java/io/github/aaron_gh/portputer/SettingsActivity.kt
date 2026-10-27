@@ -35,7 +35,8 @@ class SettingsActivity : Activity() {
 
         val buffer = findViewById<RadioGroup>(R.id.buffer)
         for ((index, ms) in Settings.BUFFERS.withIndex()) {
-            buffer.addView(radio(getString(R.string.settings_buffer_ms, ms), index, ms == settings.bufferMs))
+            val label = if (ms == 0) getString(R.string.settings_buffer_auto) else getString(R.string.settings_buffer_ms, ms)
+            buffer.addView(radio(label, index, ms == settings.bufferMs))
         }
         buffer.setOnCheckedChangeListener { group, id ->
             group.findViewById<RadioButton>(id)?.let {

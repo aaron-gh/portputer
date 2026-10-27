@@ -754,7 +754,7 @@ fn microphone_output(jitter: Arc<Mutex<crate::jitter::JitterBuffer>>) -> Result<
 /// A client's microphone: over UDP from `client_ip`, or for a relayed
 /// client (no address), through its datagram connection.
 fn start_microphone(client_ip: Option<std::net::IpAddr>, client_id: &str, inputs: &Arc<MicInputs>) -> Result<(MicSink, ServerMessage), Error> {
-    let jitter = Arc::new(Mutex::new(crate::jitter::JitterBuffer::new(udp::MIC_RATE, 1, udp::MIC_FRAMES as u32, 60)));
+    let jitter = Arc::new(Mutex::new(crate::jitter::JitterBuffer::new(udp::MIC_RATE, 1, udp::MIC_FRAMES as u32, 0)));
     let output = microphone_output(jitter.clone())?;
     let Some(client_ip) = client_ip else {
         let (key_bytes, key) = PacketKey::random();

@@ -152,8 +152,9 @@
     <string name="settings_mapping_layout">By this device\'s keyboard layout</string>
     <string name="settings_release">Release shortcut</string>
     <string name="settings_buffer">Audio buffer</string>
+    <string name="settings_buffer_auto">Automatic</string>
     <string name="settings_buffer_ms">%1$d ms</string>
-    <string name="settings_buffer_help">A larger buffer has fewer dropouts on a busy network and more delay.</string>
+    <string name="settings_buffer_help">Automatic sets the buffer from the measured network jitter. A larger fixed buffer has fewer dropouts and more delay.</string>
     <string name="settings_capture_on_connect">Send keyboard to computer on connect</string>
     <string name="settings_audio_on_connect">Computer audio on connect</string>
     <string name="settings_builtin_keyboards">Include built-in keyboards</string>

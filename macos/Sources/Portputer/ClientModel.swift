@@ -182,7 +182,7 @@ final class ClientModel: ObservableObject {
                     model.session = s
                     s.setVolume(volume: Float(model.volume))
                     s.setSpeakersMuted(muted: model.muteSpeakers)
-                    s.setLatencyMs(ms: 40)
+                    s.setLatencyMs(ms: 0)
                     if let info = s.info() { model.connected(info) }
                 }
             } catch {

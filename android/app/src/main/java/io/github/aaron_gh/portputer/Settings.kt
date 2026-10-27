@@ -40,7 +40,7 @@ class Settings(context: Context) {
         set(value) = prefs.edit().putString("release", value.name).apply()
 
     var bufferMs: Int
-        get() = prefs.getInt("buffer_ms", 40)
+        get() = prefs.getInt("buffer_ms", 0)
         set(value) = prefs.edit().putInt("buffer_ms", value).apply()
 
     var volume: Int
@@ -74,6 +74,7 @@ class Settings(context: Context) {
         set(value) = prefs.edit().putBoolean("builtin_keyboards", value).apply()
 
     companion object {
-        val BUFFERS = listOf(20, 40, 60, 100, 150, 250)
+        /** Milliseconds; 0 is automatic. */
+        val BUFFERS = listOf(0, 20, 40, 60, 100, 150, 250)
     }
 }

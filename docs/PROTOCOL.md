@@ -95,7 +95,7 @@ Packet: `0x50`, kind, sequence number (32-bit big-endian), then ChaCha20-Poly130
 | 2 | client to server | empty keep-alive |
 | 3 | client to server | microphone: PCM, 16-bit little-endian, 48 kHz mono, 240 frames (5 ms), to the `mic_ready` port, with its key |
 
-The client's jitter buffer orders packets by sequence number, holds a set amount (20 to 250 ms, 40 by default), drops packets that arrive after their turn, replaces a lost packet with the previous one at half volume (at most three times, then silence), and resamples to the output device's rate with a speed correction of up to 1% to keep the buffer at its target as the two clocks drift.
+The client's jitter buffer orders packets by sequence number, holds a set amount (20 to 250 ms) or, by default, an automatic amount: the 98th percentile of the last 4 seconds' arrival jitter plus 6 ms, 12 to 300 ms, raised at once and lowered gradually. It drops packets that arrive after their turn, replaces a lost packet with the previous one at half volume (at most three times, then silence), and resamples to the output device's rate with a speed correction of up to 1% to keep the buffer at its target as the two clocks drift. When the buffer's low point stays more than a packet above the target for half a second (after a stall on a TCP path delivers a burst), the excess packets are dropped with a one-packet crossfade.
 
 ## File transfer
 

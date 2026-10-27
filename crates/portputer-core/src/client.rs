@@ -271,7 +271,7 @@ impl Session {
         let inner = Arc::new(Inner {
             tx,
             info: Mutex::new(Some(conn.info.clone())),
-            settings: Mutex::new(AudioSettings { volume: 1.0, latency_ms: 40, mute_speakers: false }),
+            settings: Mutex::new(AudioSettings { volume: 1.0, latency_ms: 0, mute_speakers: false }),
             jitter: Mutex::new(None),
             identity: identity.clone(),
             name: config.name.clone(),
@@ -415,7 +415,7 @@ impl Session {
         }
     }
 
-    /// How much audio is held to absorb network jitter.
+    /// Milliseconds of audio held to absorb network jitter; 0 is automatic.
     pub fn set_latency_ms(&self, ms: u32) {
         self.inner.settings.lock().unwrap().latency_ms = ms;
         if let Some(j) = self.inner.jitter.lock().unwrap().as_ref() {
@@ -957,8 +957,7 @@ impl Supervisor {
             let s = self.inner.settings.lock().unwrap();
             (s.volume, s.latency_ms)
         };
-        // More held back: the relay is TCP all the way.
-        let mut buffer = JitterBuffer::new(rate, channels, frames, latency.max(100));
+        let mut buffer = JitterBuffer::new(rate, channels, frames, latency);
         buffer.gain = volume;
         let jitter = Arc::new(Mutex::new(buffer));
         let endpoint = self.relay_endpoint(info)?;

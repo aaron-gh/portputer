@@ -120,7 +120,7 @@ fn describe(e: tungstenite::Error) -> Error {
 /// is a chunk of the stream.
 async fn open_stream(url: &str) -> Result<BoxStream, Error> {
     install_crypto();
-    let (ws, _) = tokio::time::timeout(Duration::from_secs(15), tokio_tungstenite::connect_async(url))
+    let (ws, _) = tokio::time::timeout(Duration::from_secs(15), tokio_tungstenite::connect_async_with_config(url, None, true))
         .await
         .map_err(|_| Error::Protocol("the relay didn't answer".into()))?
         .map_err(describe)?;
@@ -186,7 +186,7 @@ pub async fn listen(
     let mut wait = Duration::from_secs(2);
     loop {
         let listen_url = endpoint(&url, &format!("listen/{}", home.room), &[("key", &home.key), ("session", session_name)]);
-        match tokio::time::timeout(Duration::from_secs(15), tokio_tungstenite::connect_async(&listen_url)).await {
+        match tokio::time::timeout(Duration::from_secs(15), tokio_tungstenite::connect_async_with_config(&listen_url, None, true)).await {
             Ok(Ok((ws, _))) => {
                 wait = Duration::from_secs(2);
                 let (mut sink, mut source) = ws.split();
