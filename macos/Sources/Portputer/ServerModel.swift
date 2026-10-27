@@ -48,6 +48,7 @@ final class ServerModel: ObservableObject {
     func launch() {
         // The first start asks for Accessibility permission.
         inputAllowed = Portputer.inputAllowed(ask: true)
+        diagnostic("Typing permission at launch: \(inputAllowed ? "allowed" : "not allowed") (\(inputPermissionDetail()))")
         refresh()
         if serverEnabled { start() }
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
@@ -87,7 +88,11 @@ final class ServerModel: ObservableObject {
     }
 
     private func tick() {
-        inputAllowed = Portputer.inputAllowed(ask: false)
+        let allowed = Portputer.inputAllowed(ask: false)
+        if allowed != inputAllowed {
+            diagnostic("Typing permission: \(allowed ? "allowed" : "not allowed") (\(inputPermissionDetail()))")
+        }
+        inputAllowed = allowed
         if pairingCode != nil {
             pairingSecondsLeft = handle?.pairingSecondsLeft() ?? 0
             if pairingSecondsLeft == 0 { pairingCode = nil }
@@ -195,6 +200,20 @@ final class ServerModel: ObservableObject {
         func event(event: ServerNotice) {
             Task { @MainActor in ServerModel.shared.handle(event) }
         }
+    }
+}
+
+/// Appends a line to ~/Library/Application Support/Portputer/diagnostics.log.
+@MainActor func diagnostic(_ line: String) {
+    let url = ServerModel.supportDir.appendingPathComponent("diagnostics.log")
+    let text = "\(Date()) \(line)\n"
+    if let handle = try? FileHandle(forWritingTo: url) {
+        handle.seekToEndOfFile()
+        handle.write(Data(text.utf8))
+        try? handle.close()
+    } else {
+        try? FileManager.default.createDirectory(at: ServerModel.supportDir, withIntermediateDirectories: true)
+        try? Data(text.utf8).write(to: url)
     }
 }
 

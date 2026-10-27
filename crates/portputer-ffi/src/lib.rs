@@ -574,6 +574,15 @@ pub fn input_allowed(ask: bool) -> bool {
     portputer_core::platform::input_allowed(ask)
 }
 
+/// The separate permission checks behind `input_allowed`, for the log.
+#[uniffi::export]
+pub fn input_permission_detail() -> String {
+    #[cfg(target_os = "macos")]
+    return portputer_core::platform::macos::input_permission_detail();
+    #[cfg(not(target_os = "macos"))]
+    String::new()
+}
+
 /// Whether the helper daemon and the server at the login window are
 /// installed (Mac).
 #[uniffi::export]

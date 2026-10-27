@@ -168,14 +168,27 @@ impl Injector for MacInjector {
     }
 }
 
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C" {
+    fn AXIsProcessTrusted() -> bool;
+}
+
+/// Posting key events is allowed by the Accessibility permission. Both
+/// checks are asked: the post-event preflight can stay false for the life of
+/// the process when permission is given after it starts, while posting works.
 pub fn input_allowed(ask: bool) -> bool {
-    if CGPreflightPostEventAccess() {
+    if unsafe { AXIsProcessTrusted() } || CGPreflightPostEventAccess() {
         return true;
     }
     if ask {
         return CGRequestPostEventAccess();
     }
     false
+}
+
+/// What each check says, for the log.
+pub fn input_permission_detail() -> String {
+    format!("accessibility={} post_event={}", unsafe { AXIsProcessTrusted() }, CGPreflightPostEventAccess())
 }
 
 pub fn is_root() -> bool {
