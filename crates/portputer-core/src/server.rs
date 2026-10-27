@@ -346,7 +346,7 @@ fn input_thread(session: SessionKind, commands: std::sync::mpsc::Receiver<InputC
     while let Ok(command) = commands.recv() {
         if session == SessionKind::LoginWindow && matches!(command, InputCommand::Key(..) | InputCommand::Tap(..) | InputCommand::Text(..)) {
             typed += 1;
-            if typed == 1 || reported.elapsed() > Duration::from_secs(5) {
+            if typed == 1 || typed % 10 == 0 || reported.elapsed() > Duration::from_secs(5) {
                 #[cfg(target_os = "macos")]
                 tracing::info!("{typed} key events at the login window so far; {}", platform::macos::input_permission_detail());
                 reported = Instant::now();

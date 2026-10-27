@@ -106,6 +106,14 @@ fn serve(args: &[String]) {
     tracing::info!("serving {} on port {} from {}", server.id(), server.port(), store_dir.display());
     #[cfg(target_os = "macos")]
     tracing::info!("input: {}", portputer_core::platform::macos::input_permission_detail());
+    // Whether posted keys reach macOS at the login window.
+    #[cfg(target_os = "macos")]
+    if login_window {
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            tracing::info!("{}", portputer_core::platform::macos::posting_probe());
+        });
+    }
     if std::env::var_os("PORTPUTER_PAIR").is_some() {
         // For testing without the app: prints a pairing code.
         println!("Pairing code: {}", server.new_pairing_code());
@@ -135,6 +143,8 @@ fn main() {
         Some("uninstall-driver") => install::uninstall_driver(),
         #[cfg(target_os = "macos")]
         Some("probe-audio") => println!("{}", portputer_core::audio::feed::probe()),
+        #[cfg(target_os = "macos")]
+        Some("posting-probe") => println!("{}", portputer_core::platform::macos::posting_probe()),
         #[cfg(target_os = "macos")]
         Some("restore-outputs") => println!("{}", if portputer_core::audio::loopback::recover() { "Outputs put back." } else { "Nothing to put back." }),
         #[cfg(target_os = "macos")]

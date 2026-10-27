@@ -198,6 +198,32 @@ pub fn input_permission_detail() -> String {
     )
 }
 
+/// Whether posted keys reach macOS here, for the log at the login window:
+/// Shift goes down and up (it types nothing), and the HID system's state is
+/// read while it's down. Also whether this process has a window server
+/// session, which posting needs.
+pub fn posting_probe() -> String {
+    const SHIFT: u16 = 56;
+    let session = objc2_core_graphics::CGSessionCopyCurrentDictionary().is_some();
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState);
+    let post = |down: bool| {
+        if let Some(event) = CGEvent::new_keyboard_event(source.as_deref(), SHIFT, down) {
+            CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
+        }
+    };
+    let before = CGEventSource::key_state(CGEventSourceStateID::HIDSystemState, SHIFT);
+    post(true);
+    std::thread::sleep(Duration::from_millis(100));
+    let hid = CGEventSource::key_state(CGEventSourceStateID::HIDSystemState, SHIFT);
+    let combined = CGEventSource::key_state(CGEventSourceStateID::CombinedSessionState, SHIFT);
+    post(false);
+    std::thread::sleep(Duration::from_millis(100));
+    let after = CGEventSource::key_state(CGEventSourceStateID::HIDSystemState, SHIFT);
+    format!(
+        "posting probe: window server session={session}; Shift before={before}, while posted down: HID state={hid} session state={combined}, after up={after}"
+    )
+}
+
 pub fn is_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
