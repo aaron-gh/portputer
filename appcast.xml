@@ -4,5 +4,20 @@
         <title>Portputer Updates</title>
         <description>Updates for Portputer on the Mac.</description>
         <language>en</language>
+        <item>
+            <title>Version 0.1.0</title>
+            <pubDate>Tue, 27 Oct 2026 11:01:05 -0000</pubDate>
+            <sparkle:version>27</sparkle:version>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description><![CDATA[<ul>
+<li>The first release of Portputer: control a Mac or Windows computer from an Android phone or another computer, with a screen reader.</li>
+<li>Every key of an external keyboard, system shortcuts included, the computer's audio, the phone's microphone as an input on the Mac, clipboard and file transfer, and power control.</li>
+<li>Typing at the Mac login window after a restart, and Restart Without FileVault Unlock.</li>
+<li>Reaches paired computers on the same network, over Tailscale or another VPN, or through the internet relay, with nothing to set up.</li>
+</ul>
+]]></description>
+            <enclosure url="https://github.com/aaron-gh/portputer/releases/download/v0.1.0/Portputer-0.1.0.dmg" sparkle:edSignature="Lm7jn5Xm3zrLZGkTCbeoTrpkxAPQJP4djUh2yJmMgmlHZO4Uk2hmKDwNzrrjluSoQ4h8pshh5piGDQcCuuvuBw==" length="8619723" type="application/octet-stream" />
+        </item>
     </channel>
 </rss>

@@ -4,5 +4,19 @@
         <title>Portputer Updates for Windows</title>
         <description>Updates for Portputer on Windows.</description>
         <language>en</language>
+        <item>
+            <title>Version 0.1.0</title>
+            <pubDate>Tue, 27 Oct 2026 11:01:18 -0000</pubDate>
+            <sparkle:version>27</sparkle:version>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <description><![CDATA[<ul>
+<li>The first release of Portputer: control a Mac or Windows computer from an Android phone or another computer, with a screen reader.</li>
+<li>Every key of an external keyboard, system shortcuts included, the computer's audio, the phone's microphone as an input on the Mac, clipboard and file transfer, and power control.</li>
+<li>Typing at the Mac login window after a restart, and Restart Without FileVault Unlock.</li>
+<li>Reaches paired computers on the same network, over Tailscale or another VPN, or through the internet relay, with nothing to set up.</li>
+</ul>
+]]></description>
+            <enclosure url="https://github.com/aaron-gh/portputer/releases/download/v0.1.0/Portputer-0.1.0-windows-x64-setup.exe" sparkle:edSignature="5gz1xfvk4UcRtBaVk3FS419JlADOXJTwBVLcyaBsdhe8RVcx0LW+W9ib8GTBXR+epi4ISHG2gx3aZyl6EAzvBg==" length="6798247" type="application/octet-stream" sparkle:os="windows-x64" sparkle:installerArguments="/S" />
+        </item>
     </channel>
 </rss>

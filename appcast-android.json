@@ -1,7 +1,7 @@
 {
-  "version": "0.0.0",
-  "build": 0,
-  "url": "",
-  "sha256": "",
-  "notes": ""
+  "version": "0.1.0",
+  "build": 27,
+  "url": "https://github.com/aaron-gh/portputer/releases/download/v0.1.0/Portputer-0.1.0.apk",
+  "sha256": "406d6405466e40377bc1c644e270ccf4ca7b347a64346535c6c616bff246a3ab",
+  "notes": "The first release of Portputer: control a Mac or Windows computer from this phone, with TalkBack. Every key of an external keyboard, the computer's audio, the phone's microphone, clipboard and files, and power control."
 }
