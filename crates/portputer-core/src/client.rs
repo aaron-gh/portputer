@@ -225,8 +225,8 @@ impl Session {
         let _ = self.inner.tx.send(Command::Send(message));
     }
 
-    pub fn key(&self, code: &str, down: bool) {
-        self.send(ClientMessage::Key { code: code.to_string(), down });
+    pub fn key(&self, code: &str, down: bool, repeat: bool) {
+        self.send(ClientMessage::Key { code: code.to_string(), down, repeat });
     }
 
     pub fn tap(&self, code: &str, modifiers: Vec<String>) {

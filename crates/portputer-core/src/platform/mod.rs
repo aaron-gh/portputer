@@ -13,6 +13,10 @@ pub mod windows;
 pub trait Injector {
     /// False if the system has no such key.
     fn key(&mut self, code: &str, down: bool) -> bool;
+    /// A repeat of a held key.
+    fn repeat(&mut self, code: &str) -> bool {
+        self.key(code, true)
+    }
     fn text(&mut self, text: &str);
     /// Releases every key this injector has pressed.
     fn release_all(&mut self);

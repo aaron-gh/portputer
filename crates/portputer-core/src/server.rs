@@ -74,7 +74,7 @@ impl Shared {
 }
 
 enum InputCommand {
-    Key(String, bool),
+    Key(String, bool, bool),
     Tap(String, Vec<String>),
     Text(String),
     ReleaseAll,
@@ -214,7 +214,10 @@ fn input_thread(session: SessionKind, commands: std::sync::mpsc::Receiver<InputC
     let mut injector = platform::new_injector(session);
     while let Ok(command) = commands.recv() {
         match command {
-            InputCommand::Key(code, down) => {
+            InputCommand::Key(code, _, true) => {
+                injector.repeat(&code);
+            }
+            InputCommand::Key(code, down, false) => {
                 injector.key(&code, down);
             }
             InputCommand::Tap(code, modifiers) => {
@@ -327,13 +330,13 @@ async fn serve(shared: Arc<Shared>, stream: tokio::net::TcpStream, address: Sock
                         .await?;
                 }
                 ClientMessage::Hello { .. } => {}
-                ClientMessage::Key { code, down } => {
+                ClientMessage::Key { code, down, repeat } => {
                     if crate::keys::by_code(&code).is_none() {
                         writer
                             .send(&ServerMessage::Notice { code: notices::UNKNOWN_KEY.into(), message: format!("Unknown key {code}.") })
                             .await?;
                     } else {
-                        let _ = shared.input.send(InputCommand::Key(code, down));
+                        let _ = shared.input.send(InputCommand::Key(code, down, repeat));
                     }
                 }
                 ClientMessage::Tap { code, modifiers } => {

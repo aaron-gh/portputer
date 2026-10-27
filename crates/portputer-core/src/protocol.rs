@@ -44,7 +44,13 @@ pub enum ClientMessage {
     /// Proof of the pairing code: HMAC-SHA256 over "client" and the
     /// handshake hash, keyed with the normalised code, in hex.
     Pair { proof: String },
-    Key { code: String, down: bool },
+    /// `repeat` marks the key-downs a held key repeats with.
+    Key {
+        code: String,
+        down: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        repeat: bool,
+    },
     /// Presses and releases a key with modifiers held.
     Tap { code: String, modifiers: Vec<String> },
     Text { text: String },
@@ -119,7 +125,7 @@ mod tests {
 
     #[test]
     fn json_shape() {
-        let m = ClientMessage::Key { code: "KeyA".into(), down: true };
+        let m = ClientMessage::Key { code: "KeyA".into(), down: true, repeat: false };
         assert_eq!(serde_json::to_string(&m).unwrap(), r#"{"type":"key","code":"KeyA","down":true}"#);
         let p = ClientMessage::Power { action: PowerAction::UnlockedRestart, user: None, password: None };
         assert_eq!(serde_json::to_string(&p).unwrap(), r#"{"type":"power","action":"unlocked_restart"}"#);

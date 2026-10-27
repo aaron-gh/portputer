@@ -372,8 +372,9 @@ impl ClientSession {
         Ok(self.session.pair(&code)?)
     }
 
-    pub fn key(&self, code: String, down: bool) {
-        self.session.key(&code, down);
+    /// `repeat` for the repeated key-downs of a held key.
+    pub fn key(&self, code: String, down: bool, repeat: bool) {
+        self.session.key(&code, down, repeat);
     }
 
     pub fn tap(&self, code: String, modifiers: Vec<String>) {

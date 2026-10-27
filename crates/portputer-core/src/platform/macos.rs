@@ -9,7 +9,7 @@ use std::time::Duration;
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
 use objc2_core_foundation::{CFRetained, CGPoint};
 use objc2_core_graphics::{
-    CGEvent, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation,
+    CGEvent, CGEventField, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation,
     CGPreflightPostEventAccess, CGRequestPostEventAccess,
 };
 use serde::{Deserialize, Serialize};
@@ -66,6 +66,10 @@ impl MacInjector {
     }
 
     fn post_code(&mut self, code: &str, vk: u16, down: bool) {
+        self.post_code_repeat(code, vk, down, false)
+    }
+
+    fn post_code_repeat(&mut self, code: &str, vk: u16, down: bool, repeat: bool) {
         if let Some(flag) = Self::modifier_flag(code) {
             // Both sides share one flag: it stays while either is down.
             let other_down = self.held.0.iter().any(|c| c != code && Self::modifier_flag(c) == Some(flag));
@@ -80,6 +84,9 @@ impl MacInjector {
         }
         let Some(event) = CGEvent::new_keyboard_event(self.source.as_deref(), vk, down) else { return };
         CGEvent::set_flags(Some(&event), self.flags | Self::implied_flags(code));
+        if repeat {
+            CGEvent::set_integer_value_field(Some(&event), CGEventField::KeyboardEventAutorepeat, 1);
+        }
         CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
     }
 
@@ -114,6 +121,16 @@ impl Injector for MacInjector {
         }
         self.held.note(code, down);
         true
+    }
+
+    fn repeat(&mut self, code: &str) -> bool {
+        match keys::by_code(code).map(|d| d.mac) {
+            Some(MacKey::Code(vk)) => {
+                self.post_code_repeat(code, vk, true, true);
+                true
+            }
+            _ => self.key(code, true),
+        }
     }
 
     fn text(&mut self, text: &str) {
