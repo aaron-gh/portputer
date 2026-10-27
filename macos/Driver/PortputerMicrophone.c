@@ -16,6 +16,7 @@
 
 #include <CoreAudio/AudioServerPlugIn.h>
 #include <mach/mach.h>
+#include <os/log.h>
 #include <mach/mach_time.h>
 #include <pthread.h>
 #include <servers/bootstrap.h>
@@ -121,8 +122,17 @@ typedef struct {
 
 // Sends what's been played to the speakers every 5 ms. Messages are
 // dropped, never waited for, when the helper isn't there or is behind.
+static os_log_t Log(void) {
+    static os_log_t log = NULL;
+    if (log == NULL) log = os_log_create("io.github.aaron-gh.portputer.driver", "speakers");
+    return log;
+}
+
 static void* Sender(void* unused) {
     (void)unused;
+    os_log(Log(), "Portputer Speakers: sender started");
+    kern_return_t lastLookup = KERN_SUCCESS;
+    kern_return_t lastSend = KERN_SUCCESS;
     mach_port_t port = MACH_PORT_NULL;
     UInt32 retry = 0;
     AudioMessage message;
@@ -137,7 +147,12 @@ static void* Sender(void* unused) {
                 gSpeakersSent = written;
                 continue;
             }
-            if (bootstrap_look_up(bootstrap_port, kAudioService, &port) != KERN_SUCCESS) {
+            kern_return_t found = bootstrap_look_up(bootstrap_port, kAudioService, &port);
+            if (found != lastLookup) {
+                os_log(Log(), "Portputer Speakers: looking up %{public}s: %d", kAudioService, found);
+                lastLookup = found;
+            }
+            if (found != KERN_SUCCESS) {
                 port = MACH_PORT_NULL;
                 retry = 200;
                 gSpeakersSent = written;
@@ -163,6 +178,10 @@ static void* Sender(void* unused) {
             message.header.msgh_id = kAudioMessageID;
             kern_return_t result = mach_msg(&message.header, MACH_SEND_MSG | MACH_SEND_TIMEOUT, size, 0, MACH_PORT_NULL, 0, MACH_PORT_NULL);
             gSpeakersSent += frames;
+            if (result != lastSend) {
+                os_log(Log(), "Portputer Speakers: sending: %d", result);
+                lastSend = result;
+            }
             if (result == MACH_SEND_INVALID_DEST) {
                 mach_port_deallocate(mach_task_self(), port);
                 port = MACH_PORT_NULL;

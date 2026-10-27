@@ -3,6 +3,7 @@
 #include <CoreAudio/AudioServerPlugIn.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 #define CHECK(c, m) do { if (!(c)) { printf("FAIL: %s\n", m); return 1; } } while (0)
@@ -87,6 +88,13 @@ int main(int argc, char** argv) {
     Float32 stereo[1024];
     for (int i = 0; i < 1024; i++) stereo[i] = 0.5f;
     CHECK((*d)->DoIOOperation(d, devices[2], 7, 0, kAudioServerPlugInIOOperationWriteMix, 512, &cycle, stereo, NULL) == 0, "speakers write");
+    // With the helper installed, its log shows the audio arriving.
+    if (getenv("PORTPUTER_SEND_TEST")) {
+        for (int i = 0; i < 100; i++) {
+            (*d)->DoIOOperation(d, devices[2], 7, 0, kAudioServerPlugInIOOperationWriteMix, 240, &cycle, stereo, NULL);
+            usleep(5000);
+        }
+    }
     (*d)->StopIO(d, devices[2], 0);
     printf("OK\n");
     return 0;
