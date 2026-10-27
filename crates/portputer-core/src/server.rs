@@ -338,7 +338,16 @@ impl Drop for Server {
 
 fn input_thread(session: SessionKind, commands: std::sync::mpsc::Receiver<InputCommand>) {
     let mut injector = platform::new_injector(session);
+    let mut first = true;
     while let Ok(command) = commands.recv() {
+        // At the login window, where typing is hardest to check: the first
+        // key and what macOS says about posting it.
+        #[cfg(target_os = "macos")]
+        if std::mem::take(&mut first) && session == SessionKind::LoginWindow {
+            tracing::info!("first key at the login window; {}", platform::macos::input_permission_detail());
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = &mut first;
         match command {
             InputCommand::Key(code, _, true) => {
                 injector.repeat(&code);

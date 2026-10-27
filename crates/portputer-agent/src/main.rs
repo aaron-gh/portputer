@@ -104,6 +104,8 @@ fn serve(args: &[String]) {
         }
     };
     tracing::info!("serving {} on port {} from {}", server.id(), server.port(), store_dir.display());
+    #[cfg(target_os = "macos")]
+    tracing::info!("input: {}", portputer_core::platform::macos::input_permission_detail());
     if std::env::var_os("PORTPUTER_PAIR").is_some() {
         // For testing without the app: prints a pairing code.
         println!("Pairing code: {}", server.new_pairing_code());
