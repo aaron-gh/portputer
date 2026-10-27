@@ -29,7 +29,7 @@ build() {
     export "CC_${triple//-/_}=$BIN/${clang_triple}${API}-clang"
     export "AR_${triple//-/_}=$BIN/llvm-ar"
     # 16 KB pages, which Android 15 devices can use.
-    export "CARGO_TARGET_${upper}_RUSTFLAGS=-C link-arg=-Wl,-z,max-page-size=16384"
+    export "CARGO_TARGET_${upper}_RUSTFLAGS=-C link-arg=-Wl,-z,max-page-size=16384 -C strip=symbols"
     "$CARGO" build ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"} -q -p portputer-ffi --lib --target "$triple"
     mkdir -p "$APP/jniLibs/$abi"
     cp "target/$triple/$PROFILE/libportputer_ffi.so" "$APP/jniLibs/$abi/"
@@ -38,6 +38,9 @@ build() {
 build aarch64-linux-android arm64-v8a aarch64-linux-android
 build x86_64-linux-android x86_64 x86_64-linux-android
 
+# From this computer's build of the library: the Android ones are stripped of
+# the metadata UniFFI reads, and the interface is the same.
+"$CARGO" build ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"} -q -p portputer-ffi --lib
 "$CARGO" run ${CARGO_FLAGS[@]+"${CARGO_FLAGS[@]}"} -q -p portputer-ffi --bin uniffi-bindgen -- \
-    generate --library "target/aarch64-linux-android/$PROFILE/libportputer_ffi.so" \
+    generate --library "target/$PROFILE/libportputer_ffi.a" \
     --language kotlin --no-format --out-dir "$APP/java"

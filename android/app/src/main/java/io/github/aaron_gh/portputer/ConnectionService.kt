@@ -34,6 +34,8 @@ class ConnectionService : Service(), Connection.Listener {
     }
 
     private var wifi: WifiManager.WifiLock? = null
+    /** For finding the computer again at a new address after it restarts. */
+    private var multicast: WifiManager.MulticastLock? = null
     private var wake: PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -45,6 +47,10 @@ class ConnectionService : Service(), Connection.Listener {
             WifiManager.WIFI_MODE_FULL_HIGH_PERF
         }
         wifi = getSystemService(WifiManager::class.java)?.createWifiLock(mode, "portputer:audio")?.apply { acquire() }
+        multicast = getSystemService(WifiManager::class.java)?.createMulticastLock("portputer:reconnect")?.apply {
+            setReferenceCounted(false)
+            acquire()
+        }
         wake = getSystemService(PowerManager::class.java)?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "portputer:connection")?.apply {
             setReferenceCounted(false)
             acquire()
@@ -105,6 +111,7 @@ class ConnectionService : Service(), Connection.Listener {
     override fun onDestroy() {
         Connection.removeListener(this)
         wifi?.takeIf { it.isHeld }?.release()
+        multicast?.takeIf { it.isHeld }?.release()
         wake?.takeIf { it.isHeld }?.release()
         super.onDestroy()
     }

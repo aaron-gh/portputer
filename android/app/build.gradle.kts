@@ -41,6 +41,7 @@ val buildRust by tasks.registering(Exec::class) {
     commandLine("./build-rust.sh")
     inputs.files(fileTree("../../crates") { include("**/*.rs", "**/Cargo.toml") })
     inputs.file("../../Cargo.lock")
+    inputs.file("../build-rust.sh")
     outputs.dir("src/main/jniLibs")
     outputs.dir("src/main/java/uniffi")
 }
