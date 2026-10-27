@@ -83,6 +83,14 @@ fn serve(args: &[String]) {
         }
     };
     tracing::info!("serving {} on port {} from {}", server.id(), server.port(), store_dir.display());
+    // What the login window allows with audio, for the log.
+    #[cfg(target_os = "macos")]
+    if login_window {
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            tracing::info!("{}", portputer_core::audio::feed::probe());
+        });
+    }
     if std::env::var_os("PORTPUTER_PAIR").is_some() {
         // For testing without the app: prints a pairing code.
         println!("Pairing code: {}", server.new_pairing_code());
@@ -110,6 +118,8 @@ fn main() {
         Some("install-driver") => install::install_driver(args.get(1).map(String::as_str)),
         #[cfg(target_os = "macos")]
         Some("uninstall-driver") => install::uninstall_driver(),
+        #[cfg(target_os = "macos")]
+        Some("probe-audio") => println!("{}", portputer_core::audio::feed::probe()),
         _ => usage(),
     }
 }
