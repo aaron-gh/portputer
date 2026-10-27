@@ -9,6 +9,7 @@ import java.io.File
 import java.util.concurrent.CopyOnWriteArraySet
 import kotlin.concurrent.thread
 import uniffi.portputer_ffi.ClientSession
+import uniffi.portputer_ffi.FileInfo
 import uniffi.portputer_ffi.PortputerException
 import uniffi.portputer_ffi.Power
 import uniffi.portputer_ffi.ServerInfo
@@ -57,6 +58,33 @@ object Connection {
         private set
     var micOn = false
         private set
+    private var clipboard: ClipboardSync? = null
+
+    /** The session, for transfers, which run on their own threads. */
+    fun session(): ClientSession? = if (canSend()) session else null
+
+    /** Sends the phone's clipboard if it changed, as Portputer comes to the front. */
+    fun clipboardFocus() {
+        clipboard?.send()
+    }
+
+    fun setShareClipboard(on: Boolean) {
+        Settings(app).shareClipboard = on
+        updateClipboard()
+    }
+
+    private fun updateClipboard() {
+        val info = (state as? State.Connected)?.info
+        val want = info != null && info.trusted && info.files && Settings(app).shareClipboard
+        val s = session
+        if (want && clipboard == null && s != null) {
+            clipboard = ClipboardSync(app, s, info!!.name).also { it.start() }
+        } else if (!want && clipboard != null) {
+            clipboard?.stop()
+            clipboard = null
+        }
+    }
+
     /** Modifiers held from the key menu. */
     val held = linkedSetOf<String>()
 
@@ -89,7 +117,7 @@ object Connection {
         val name = Settings(app).deviceName
         thread(name = "portputer-connect") {
             try {
-                val s = ClientSession.connect(target.host, target.port.toUShort(), target.id, storeDir, name, Relay(gen))
+                val s = ClientSession.connect(target.host, target.port.toUShort(), target.id, storeDir, name, false, Relay(gen))
                 main.post {
                     if (gen != generation) {
                         s.disconnect()
@@ -118,6 +146,7 @@ object Connection {
     private fun onConnected(info: ServerInfo) {
         val wasTrusted = this.info?.trusted == true
         state = State.Connected(info)
+        updateClipboard()
         if (info.trusted && !wasTrusted) {
             val settings = Settings(app)
             if (settings.captureOnConnect && KeyboardService.isEnabled(app) && !capturing) {
@@ -132,6 +161,8 @@ object Connection {
 
     fun disconnect() {
         generation++
+        clipboard?.stop()
+        clipboard = null
         session?.let {
             it.disconnect()
             it.close()
@@ -262,6 +293,7 @@ object Connection {
 
         override fun closed(reason: String) = post {
             val name = info?.name ?: (state as? State.Connecting)?.target?.name ?: ""
+            clipboard = null
             session?.close()
             session = null
             capturing = false
@@ -308,5 +340,11 @@ object Connection {
             micOn = false
             changed()
         }
+
+        override fun clipboardText(text: String) = post { clipboard?.receivedText(text) }
+
+        override fun clipboardFiles(files: List<FileInfo>) = post { clipboard?.receivedFiles(files) }
+
+        override fun clipboardSynced(message: String) = post { say(message) }
     }
 }

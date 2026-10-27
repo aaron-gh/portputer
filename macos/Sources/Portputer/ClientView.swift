@@ -165,6 +165,15 @@ struct ClientView: View {
                 }
                 .disabled(info.power.isEmpty)
                 Button("Release All Keys") { model.releaseAll() }
+                if info.files {
+                    Button("Send Files…") {
+                        let panel = NSOpenPanel()
+                        panel.allowsMultipleSelection = true
+                        panel.canChooseDirectories = false
+                        panel.message = "Choose files to send to Downloads on \(info.name)."
+                        if panel.runModal() == .OK { model.sendFiles(panel.urls) }
+                    }
+                }
             }
             HStack {
                 TextField("Text to type", text: $text)

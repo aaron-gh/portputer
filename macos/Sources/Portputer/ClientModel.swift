@@ -136,7 +136,7 @@ final class ClientModel: ObservableObject {
         let device = computerName()
         DispatchQueue.global().async {
             do {
-                let s = try ClientSession.connect(host: host, port: port, expectedId: id, storeDir: store, deviceName: device, listener: Events(gen: gen))
+                let s = try ClientSession.connect(host: host, port: port, expectedId: id, storeDir: store, deviceName: device, localClipboard: true, listener: Events(gen: gen))
                 Task { @MainActor in
                     let model = ClientModel.shared
                     guard gen == model.generation else {
@@ -217,6 +217,35 @@ final class ClientModel: ObservableObject {
     func key(_ code: String, down: Bool, repeat isRepeat: Bool = false) {
         guard canSend else { return }
         session?.key(code: code, down: down, repeat: isRepeat)
+    }
+
+    /// Uploads files to the computer's Downloads folder.
+    func sendFiles(_ urls: [URL]) {
+        guard canSend, let s = session else { return }
+        let name = info?.name ?? ""
+        message = "Sending \(urls.count == 1 ? "1 file" : "\(urls.count) files")."
+        announce(message)
+        DispatchQueue.global().async {
+            var sent = 0
+            var failure: String?
+            for url in urls {
+                do {
+                    _ = try s.upload(path: url.path, name: nil, clipboard: nil, listener: NoProgress())
+                    sent += 1
+                } catch {
+                    failure = error.localizedDescription
+                }
+            }
+            let text = failure.map { "Sending failed: \($0)" } ?? "Sent \(sent == 1 ? "1 file" : "\(sent) files") to Downloads on \(name)."
+            Task { @MainActor in
+                ClientModel.shared.message = text
+                announce(text)
+            }
+        }
+    }
+
+    private final class NoProgress: ProgressListener {
+        func progress(done: UInt64, total: UInt64) {}
     }
 
     func releaseAll() {
@@ -304,6 +333,15 @@ final class ClientModel: ObservableObject {
 
         func audioStarted(sampleRate: UInt32) { onMain { $0.audioOn = true } }
         func micStarted() { onMain { $0.micOn = true } }
+        // This Mac's clipboard is kept in step by the core, so these two don't come.
+        func clipboardText(text: String) {}
+        func clipboardFiles(files: [FileInfo]) {}
+        func clipboardSynced(message: String) {
+            onMain { m in
+                m.message = message
+                announce(message)
+            }
+        }
         func micStopped(reason: String) { onMain { $0.micOn = false } }
         func audioStopped(reason: String) { onMain { $0.audioOn = false } }
     }

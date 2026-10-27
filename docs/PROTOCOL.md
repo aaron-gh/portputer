@@ -44,7 +44,7 @@ A man in the middle has a different `h` with each side, so can't produce either 
 
 | Type | Fields |
 |---|---|
-| `welcome` | `server_id`, `name`, `os`, `session`, `user`, `paired`, `version`, `power` (actions available), `audio` (bool), `mute` (bool: speakers can be muted while streaming), `mic` (bool: the Portputer Microphone driver is installed) |
+| `welcome` | `server_id`, `name`, `os`, `session`, `user`, `paired`, `version`, `power` (actions available), `audio` (bool), `mute` (bool: speakers can be muted while streaming), `mic` (bool: the Portputer Microphone driver is installed), `files` (bool: clipboard and file transfer) |
 | `paired` | `proof` |
 | `error` | `code`, `message` |
 | `notice` | `code`, `message` (such as a missing permission on the server) |
@@ -52,6 +52,8 @@ A man in the middle has a different `h` with each side, so can't produce either 
 | `audio_stopped` | `reason` |
 | `mic_ready` | `port` (UDP), `key` (hex, 32 bytes) |
 | `mic_stopped` | `reason` |
+| `clipboard_text` | `text` copied on the server (up to 60,000 bytes) |
+| `clipboard_files` | `files`: `name` and `size` of each file copied on the server |
 | `pong` | `n` |
 
 Error codes: `not_paired`, `pairing_failed`, `no_pairing_code`, `unsupported`, `power_failed`, `audio_failed`, `mute_failed`, `mic_failed`, `bad_message`, `version`.
@@ -69,6 +71,8 @@ The speakers are muted while any client streaming audio asks for it, and unmuted
 | `audio_start` | `mute` (optional): keep the sound from the computer's speakers while it streams |
 | `audio_stop` | |
 | `mute_speakers` | `muted` |
+| `clipboard_watch` | `on`: the server sends its clipboard as it changes |
+| `clipboard_text` | `text`: put on the server's clipboard |
 | `mic_start` / `mic_stop` | the client's microphone, to the server's Portputer Microphone |
 | `power` | `action`: `restart`, `shutdown`, `sleep`, `log_out`, `lock`, `force_restart`, `unlocked_restart`; `user` and `password` for `unlocked_restart` |
 | `ping` | `n`, every 5 seconds |
@@ -90,3 +94,16 @@ Packet: `0x50`, kind, sequence number (32-bit big-endian), then ChaCha20-Poly130
 | 3 | client to server | microphone: PCM, 16-bit little-endian, 48 kHz mono, 240 frames (5 ms), to the `mic_ready` port, with its key |
 
 The client's jitter buffer orders packets by sequence number, holds a set amount (20 to 250 ms, 40 by default), drops packets that arrive after their turn, replaces a lost packet with the previous one at half volume (at most three times, then silence), and resamples to the output device's rate with a speed correction of up to 1% to keep the buffer at its target as the two clocks drift.
+
+## File transfer
+
+A second connection, with the same handshake and `"transfer": true` in the hello, for each operation. After the welcome, the client sends a request and the server answers. File data goes in data frames: Noise transport messages whose plaintext is a zero byte and up to 65,518 bytes of the file. Other frames are JSON.
+
+| Request | Answer |
+|---|---|
+| `list` `path` (empty: home) | `listing`: `path`, `parent`, `entries` (`name`, `path`, `dir`, `size`, `modified`), `places` (`name`, `path`) |
+| `download` `path` | `file_start` (`name`, `size`), data frames, `file_end`, `done` |
+| `upload` `name`, `size`, `clipboard` (optional copy number), then data frames | `done` `path`: saved in Downloads, or with `clipboard`, in a cache folder and put on the clipboard with the copy's other files |
+| `clipboard_files` | each file on the server's clipboard as `file_start`, data, `file_end`; then `done` |
+
+Errors are `error` `message`. Received file names keep only their last component, and an existing name gets a number ("report 2.pdf"). Transfers need a paired client and a logged-in user.

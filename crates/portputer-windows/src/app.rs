@@ -39,6 +39,7 @@ mod id {
     pub const AUDIO: u16 = 304;
     pub const MUTE_SPEAKERS: u16 = 312;
     pub const MIC: u16 = 313;
+    pub const SEND_FILES: u16 = 314;
     pub const VOLUME: u16 = 305;
     pub const KEYS: u16 = 306;
     pub const TEXT: u16 = 307;
@@ -88,6 +89,7 @@ struct Controls {
     keys: HWND,
     power: HWND,
     release_all: HWND,
+    send_files: HWND,
     text_label: HWND,
     text: HWND,
     type_text: HWND,
@@ -275,6 +277,7 @@ impl App {
             keys: ui::button(hwnd, "Keys and Shortcuts", id::KEYS),
             power: ui::button(hwnd, "Power", id::POWER),
             release_all: ui::button(hwnd, "Release All Keys", id::RELEASE_ALL),
+            send_files: ui::button(hwnd, "Send Files", id::SEND_FILES),
             text_label: l("Text to type"),
             text: ui::edit(hwnd, id::TEXT, false),
             type_text: ui::button(hwnd, "Type", id::TYPE),
@@ -314,7 +317,7 @@ impl App {
         f.row(&[(c.capture, 1)], h);
         f.row(&[(c.audio, 1), (c.mute_speakers, 1), (c.mic, 1)], h);
         f.row(&[(c.volume_label, 1), (c.volume, 3)], 30);
-        f.row(&[(c.keys, 1), (c.power, 1), (c.release_all, 1)], h + 4);
+        f.row(&[(c.keys, 1), (c.power, 1), (c.release_all, 1), (c.send_files, 1)], h + 4);
         f.row(&[(c.text_label, 1), (c.text, 3), (c.type_text, 1)], h + 2);
         f.row(&[(c.disconnect, 1)], h + 4);
         f.gap(8);
@@ -353,7 +356,7 @@ impl App {
         for h in [c.pair_label, c.pair_code, c.pair] {
             ui::show(h, untrusted);
         }
-        for h in [c.capture, c.audio, c.mute_speakers, c.mic, c.volume_label, c.volume, c.keys, c.power, c.release_all, c.text_label, c.text, c.type_text] {
+        for h in [c.capture, c.audio, c.mute_speakers, c.mic, c.volume_label, c.volume, c.keys, c.power, c.release_all, c.send_files, c.text_label, c.text, c.type_text] {
             ui::show(h, info.as_ref().is_some_and(|i| i.trusted));
             ui::enable(h, trusted);
         }
@@ -363,6 +366,7 @@ impl App {
             ui::enable(c.volume, trusted && i.audio);
             ui::show(c.mute_speakers, i.trusted && i.audio && i.mute);
             ui::show(c.mic, i.trusted && i.mic);
+            ui::show(c.send_files, i.trusted && i.files);
             ui::enable(c.power, trusted && !i.power.is_empty());
         }
         ui::set_checked(c.capture, self.capturing);
@@ -465,7 +469,7 @@ impl App {
         self.conn = Conn::Connecting(name.clone());
         self.say(&format!("Connecting to {name}."));
         self.refresh();
-        let config = ClientConfig { store_dir: client_dir(), name: computer_name(), observer: Arc::new(SessionEvents(generation)) };
+        let config = ClientConfig { store_dir: client_dir(), name: computer_name(), observer: Arc::new(SessionEvents(generation)), local_clipboard: true };
         std::thread::spawn(move || {
             let result = Session::connect(&host, port, id, config);
             ui::run_on_ui(move || {
@@ -552,6 +556,9 @@ impl App {
             SessionEvent::AudioStarted { .. } => self.say("Audio on."),
             SessionEvent::AudioStopped { .. } => {}
             SessionEvent::MicStarted => self.say("Microphone on."),
+            SessionEvent::ClipboardSynced { message } => self.say(&message),
+            // This computer's clipboard is kept in step by the core.
+            SessionEvent::ClipboardText { .. } | SessionEvent::ClipboardFiles { .. } => {}
             SessionEvent::MicStopped { .. } => ui::set_checked(self.c.mic, false),
         }
     }
@@ -740,6 +747,7 @@ impl App {
                     if ui::checked(self.c.mic) { s.start_mic() } else { s.stop_mic() }
                 }
             }
+            id::SEND_FILES => self.send_files(),
             id::MUTE_SPEAKERS => {
                 let muted = ui::checked(self.c.mute_speakers);
                 set_setting("mute_speakers", if muted { "1" } else { "0" });
@@ -774,6 +782,32 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Uploads files chosen in the Open dialog to the computer's Downloads folder.
+    fn send_files(&mut self) {
+        let Some(session) = self.session.clone() else { return };
+        let files = ui::open_files(self.hwnd, "Send Files");
+        if files.is_empty() {
+            return;
+        }
+        let n = files.len();
+        self.say(&format!("Sending {}.", portputer_core::client::count_files(n)));
+        std::thread::spawn(move || {
+            let mut failure = None;
+            for f in &files {
+                if let Err(e) = session.upload(f, None, None, |_, _| {}) {
+                    failure = Some(e.to_string());
+                }
+            }
+            let text = match failure {
+                Some(e) => format!("Sending failed: {e}"),
+                None => format!("Sent {} to Downloads.", portputer_core::client::count_files(n)),
+            };
+            ui::run_on_ui(move || {
+                with_app(|a| a.say(&text));
+            });
+        });
     }
 
     fn selected_computer(&self) -> Option<Computer> {

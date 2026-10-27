@@ -255,3 +255,30 @@ pub fn confirm(owner: HWND, title: &str, text: &str) -> bool {
     let m = wide(text);
     unsafe { MessageBoxW(Some(owner), PCWSTR(m.as_ptr()), PCWSTR(t.as_ptr()), MB_OKCANCEL | MB_ICONQUESTION) == IDOK }
 }
+
+/// The Open dialog, for several files. Empty if cancelled.
+pub fn open_files(owner: HWND, title: &str) -> Vec<std::path::PathBuf> {
+    use windows::Win32::UI::Controls::Dialogs::{GetOpenFileNameW, OFN_ALLOWMULTISELECT, OFN_EXPLORER, OFN_FILEMUSTEXIST, OPENFILENAMEW};
+    let mut buffer = vec![0u16; 65536];
+    let title = wide(title);
+    let mut ofn = OPENFILENAMEW {
+        lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
+        hwndOwner: owner,
+        lpstrFile: windows::core::PWSTR(buffer.as_mut_ptr()),
+        nMaxFile: buffer.len() as u32,
+        lpstrTitle: PCWSTR(title.as_ptr()),
+        Flags: OFN_ALLOWMULTISELECT | OFN_EXPLORER | OFN_FILEMUSTEXIST,
+        ..Default::default()
+    };
+    if !unsafe { GetOpenFileNameW(&mut ofn) }.as_bool() {
+        return vec![];
+    }
+    // One file: its full path. Several: the folder, then each name, each
+    // ending in a nul, with a second nul at the end.
+    let parts: Vec<String> = buffer.split(|c| *c == 0).take_while(|p| !p.is_empty()).map(String::from_utf16_lossy).collect();
+    match parts.as_slice() {
+        [] => vec![],
+        [one] => vec![std::path::PathBuf::from(one)],
+        [dir, names @ ..] => names.iter().map(|n| std::path::Path::new(dir).join(n)).collect(),
+    }
+}

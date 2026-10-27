@@ -287,6 +287,8 @@ pub struct ServerInfo {
     pub mute: bool,
     /// The computer offers this device's microphone to its apps.
     pub mic: bool,
+    /// Clipboard and file transfer are available.
+    pub files: bool,
     pub host: String,
     pub port: u16,
     /// Paired both ways. Until it is, only `pair` does anything.
@@ -306,6 +308,7 @@ impl From<client::ServerInfo> for ServerInfo {
             audio: i.audio,
             mute: i.mute,
             mic: i.mic,
+            files: i.files,
             host: i.host,
             port: i.port,
             trusted: i.trusted,
@@ -324,6 +327,46 @@ pub trait SessionListener: Send + Sync {
     fn audio_stopped(&self, reason: String);
     fn mic_started(&self);
     fn mic_stopped(&self, reason: String);
+    /// Text copied on the computer.
+    fn clipboard_text(&self, text: String);
+    /// Files copied on the computer; `ClientSession::clipboard_files` fetches them.
+    fn clipboard_files(&self, files: Vec<FileInfo>);
+    /// What the client did with this computer's clipboard (desktop apps).
+    fn clipboard_synced(&self, message: String);
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FileInfo {
+    pub name: String,
+    pub size: u64,
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FileEntry {
+    pub name: String,
+    pub path: String,
+    pub dir: bool,
+    pub size: u64,
+    pub modified: u64,
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FilePlace {
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FileListing {
+    pub path: String,
+    pub parent: Option<String>,
+    pub entries: Vec<FileEntry>,
+    pub places: Vec<FilePlace>,
+}
+
+#[uniffi::export(with_foreign)]
+pub trait ProgressListener: Send + Sync {
+    fn progress(&self, done: u64, total: u64);
 }
 
 struct Relay(Arc<dyn SessionListener>);
@@ -340,6 +383,11 @@ impl SessionObserver for Relay {
             SessionEvent::AudioStopped { reason } => self.0.audio_stopped(reason),
             SessionEvent::MicStarted => self.0.mic_started(),
             SessionEvent::MicStopped { reason } => self.0.mic_stopped(reason),
+            SessionEvent::ClipboardText { text } => self.0.clipboard_text(text),
+            SessionEvent::ClipboardFiles { files } => {
+                self.0.clipboard_files(files.into_iter().map(|f| FileInfo { name: f.name, size: f.size }).collect())
+            }
+            SessionEvent::ClipboardSynced { message } => self.0.clipboard_synced(message),
         }
     }
 }
@@ -368,10 +416,11 @@ impl ClientSession {
         expected_id: Option<String>,
         store_dir: String,
         device_name: String,
+        local_clipboard: bool,
         listener: Arc<dyn SessionListener>,
     ) -> Result<Arc<Self>, PortputerError> {
         init_logging();
-        let config = ClientConfig { store_dir: PathBuf::from(store_dir), name: device_name, observer: Arc::new(Relay(listener)) };
+        let config = ClientConfig { store_dir: PathBuf::from(store_dir), name: device_name, observer: Arc::new(Relay(listener)), local_clipboard };
         let session = Session::connect(&host, port, expected_id, config)?;
         Ok(Arc::new(ClientSession { session }))
     }
@@ -420,6 +469,55 @@ impl ClientSession {
 
     pub fn stop_mic(&self) {
         self.session.stop_mic();
+    }
+
+    /// Has the computer send its clipboard as it changes.
+    pub fn set_clipboard_watch(&self, on: bool) {
+        self.session.set_clipboard_watch(on);
+    }
+
+    pub fn send_clipboard_text(&self, text: String) {
+        self.session.send_clipboard_text(&text);
+    }
+
+    /// A folder on the computer; empty is the home folder. Blocks.
+    pub fn list_files(&self, path: String) -> Result<FileListing, PortputerError> {
+        match self.session.list_files(&path)? {
+            portputer_core::files::TransferReply::Listing { path, parent, entries, places } => Ok(FileListing {
+                path,
+                parent,
+                entries: entries
+                    .into_iter()
+                    .map(|e| FileEntry { name: e.name, path: e.path, dir: e.dir, size: e.size, modified: e.modified })
+                    .collect(),
+                places: places.into_iter().map(|p| FilePlace { name: p.name, path: p.path }).collect(),
+            }),
+            _ => Err(PortputerError::Failed { message: "Unexpected reply.".into() }),
+        }
+    }
+
+    /// Downloads a file from the computer into `dest_dir`; returns where. Blocks.
+    pub fn download(&self, path: String, dest_dir: String, listener: Arc<dyn ProgressListener>) -> Result<String, PortputerError> {
+        let saved = self.session.download(&path, &PathBuf::from(dest_dir), move |d, t| listener.progress(d, t))?;
+        Ok(saved.display().to_string())
+    }
+
+    /// Uploads a file to the computer's Downloads folder, or with
+    /// `clipboard` (one number per copy), to its clipboard. Blocks.
+    pub fn upload(
+        &self,
+        path: String,
+        name: Option<String>,
+        clipboard: Option<u64>,
+        listener: Arc<dyn ProgressListener>,
+    ) -> Result<String, PortputerError> {
+        Ok(self.session.upload(&PathBuf::from(path), name, clipboard, move |d, t| listener.progress(d, t))?)
+    }
+
+    /// Fetches the files on the computer's clipboard into `dest_dir`. Blocks.
+    pub fn clipboard_files(&self, dest_dir: String, listener: Arc<dyn ProgressListener>) -> Result<Vec<String>, PortputerError> {
+        let paths = self.session.clipboard_files(&PathBuf::from(dest_dir), move |d, t| listener.progress(d, t))?;
+        Ok(paths.into_iter().map(|p| p.display().to_string()).collect())
     }
 
     /// Keeps the sound from the computer's own speakers while it streams.

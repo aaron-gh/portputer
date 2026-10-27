@@ -34,6 +34,8 @@ Not yet run: the Mac app's client window, Mute Computer Speakers, the login wind
 - Send Keyboard to Computer: the Portputer Keyboard accessibility service takes key events from external keyboards (built-in keyboards optionally) before the rest of the system and sends them to the computer. Keys go by physical position by default, so the computer's keyboard layout applies; Settings switches to the device's layout. The release shortcut switches between computer and phone: Control-Meta-Escape by default (Meta is the Windows or Command key), with others in Settings. The phone's own buttons, such as volume, stay on the phone.
 - Computer Audio, with volume, and Mute Computer Speakers, which keeps the sound from the computer's own speakers while it plays on the phone. On a Mac the capture tap is set to muted, so the stream keeps the sound; on Windows the output device is muted, and put back as it was when the audio stops. Audio buffer in Settings.
 - Send Microphone: the phone's microphone becomes Portputer Microphone, an input device on the Mac (needs the Portputer Microphone driver, below).
+- Share Clipboard: text copied on either side is on the other's clipboard. Files copied on the computer (up to 100 MB in total) are transferred and put on the phone's clipboard; files copied on the phone are transferred and put on the computer's, so they paste in the Finder or File Explorer. Android lets only the app in front read the clipboard, so the phone's clipboard goes to the computer when it changes while Portputer is open, and when Portputer comes to the front.
+- Files: the computer's folders, starting at the home folder, with Places (Home, Desktop, Documents, Downloads, and disks). Activating a file downloads it to Download/Portputer on the phone. Send Files uploads files from the phone to Downloads on the computer. Transfers run on a second encrypted connection, so they don't hold up keys.
 - Keys and Shortcuts: keys a phone keyboard lacks (Command, Option, Fn, F1 to F24, media, brightness, Mission Control, Eject, Insert, Print Screen and others) and system shortcuts for the connected system. Activating a key presses it. Modifiers also have Hold, as a custom action and as a button hidden from screen readers.
 - Type Text.
 - Power: Restart, Shut Down, Sleep, Lock Screen, Log Out, Force Restart, Restart Without FileVault Unlock.
@@ -53,7 +55,7 @@ A menu bar app (no Dock icon; opening it again shows Settings):
 - Server for paired devices, on port 47800. Open at Login. Announces connections through VoiceOver.
 - Pair New Device: shows the code, spelled out for VoiceOver.
 - Settings: permissions (Accessibility for typing; System Audio Recording, which macOS requests on first use), paired devices, login window support.
-- Connect to Computer: the client, for controlling another Mac or a Windows PC. Send Keyboard to Computer takes every key, system shortcuts included (as AAE does), until Control-Command-Escape.
+- Connect to Computer: the client, for controlling another Mac or a Windows PC. Its clipboard and the other computer's are kept in step, files included; Send Files uploads to the other computer's Downloads. Send Keyboard to Computer takes every key, system shortcuts included (as AAE does), until Control-Command-Escape.
 
 Portputer Microphone (Settings, Microphone, Install, with an administrator's password) installs Portputer's own audio driver, `/Library/Audio/Plug-Ins/HAL/PortputerMicrophone.driver`: an Audio Server plug-in, which runs in user space and needs no kernel extension. It has an input device, Portputer Microphone, which apps record from, and a hidden output device the server plays the connected device's microphone into; both share one buffer and one clock. 48 kHz mono. Installing or removing it restarts Core Audio, which stops all sound for a moment. Source: `macos/Driver/`; `macos/Driver/test.sh` loads the built driver as Core Audio would and checks its devices and loopback.
 
@@ -74,7 +76,7 @@ Build: `macos/build.sh` (release) or `macos/build.sh --debug`, into `macos/build
 One window and a notification area icon:
 
 - Server for paired devices, Start at login (`--background`), Pair New Device, paired devices.
-- Computers on the network, Connect by Address, and the connected computer's controls: Send keyboard to computer (a low-level keyboard hook takes every key, Windows shortcuts included, while Portputer is in front, until Control-Windows-Escape), Computer audio, Keys and Shortcuts, Power, Type.
+- Computers on the network, Connect by Address, and the connected computer's controls (clipboard kept in step, files included; Send Files): Send keyboard to computer (a low-level keyboard hook takes every key, Windows shortcuts included, while Portputer is in front, until Control-Windows-Escape), Computer audio, Keys and Shortcuts, Power, Type.
 - Status changes are spoken through NVDA's controller client if `nvdaControllerClient.dll` is beside `Portputer.exe`, and are a UI Automation live region otherwise.
 
 System audio is captured with WASAPI loopback, keys are sent with SendInput by scan code.
@@ -82,6 +84,8 @@ System audio is captured with WASAPI loopback, keys are sent with SendInput by s
 Build on the Mac: `windows/build.sh`, which needs MinGW-w64 (`brew install mingw-w64`).
 
 Not yet on Windows: the microphone driver (Windows only loads kernel audio drivers signed by Microsoft), control before login (a service running on the secure desktop), Control-Alt-Delete, and Restart Without Disk Unlock (BitLocker).
+
+Clipboard and files are off at the Mac login window, where the server runs as root. Not yet in the Mac and Windows clients: browsing and downloading the other computer's files (the Android app has it).
 
 ## Security
 

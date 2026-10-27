@@ -34,6 +34,8 @@ class ConnectedActivity : Activity(), Connection.Listener {
     private lateinit var audio: Switch
     private lateinit var muteSpeakers: Switch
     private lateinit var mic: Switch
+    private lateinit var shareClipboard: Switch
+    private lateinit var files: Button
     private lateinit var micHelp: TextView
     private lateinit var volume: SeekBar
     private lateinit var power: Button
@@ -58,6 +60,10 @@ class ConnectedActivity : Activity(), Connection.Listener {
         audio = findViewById(R.id.audio)
         muteSpeakers = findViewById(R.id.mute_speakers)
         mic = findViewById(R.id.mic)
+        shareClipboard = findViewById(R.id.share_clipboard)
+        files = findViewById(R.id.files)
+        shareClipboard.setOnCheckedChangeListener { _, on -> if (!updating) Connection.setShareClipboard(on) }
+        files.setOnClickListener { startActivity(Intent(this, FilesActivity::class.java)) }
         micHelp = findViewById(R.id.mic_help)
         volume = findViewById(R.id.volume)
         power = findViewById(R.id.power)
@@ -181,6 +187,9 @@ class ConnectedActivity : Activity(), Connection.Listener {
                     micHelp.visibility = mic.visibility
                     micHelp.text = getString(R.string.mic_help, info.name)
                     mic.isChecked = Connection.micWanted
+                    shareClipboard.visibility = if (info.files) View.VISIBLE else View.GONE
+                    shareClipboard.isChecked = Settings(this).shareClipboard
+                    files.visibility = shareClipboard.visibility
                 }
             }
             is Connection.State.Reconnecting -> {
@@ -217,7 +226,13 @@ class ConnectedActivity : Activity(), Connection.Listener {
     }
 
     private fun setControlsEnabled(enabled: Boolean) {
-        listOf<View>(capture, audio, muteSpeakers, mic, volume, power, findViewById(R.id.keys), findViewById(R.id.text)).forEach { it.isEnabled = enabled }
+        listOf<View>(capture, audio, muteSpeakers, mic, shareClipboard, files, volume, power, findViewById(R.id.keys), findViewById(R.id.text)).forEach { it.isEnabled = enabled }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Android lets only the app in front read the clipboard.
+        if (hasFocus) Connection.clipboardFocus()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, results: IntArray) {

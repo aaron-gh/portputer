@@ -60,6 +60,11 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("mute_speakers", false)
         set(value) = prefs.edit().putBoolean("mute_speakers", value).apply()
 
+    /** The phone's clipboard and the computer's are kept in step. */
+    var shareClipboard: Boolean
+        get() = prefs.getBoolean("share_clipboard", true)
+        set(value) = prefs.edit().putBoolean("share_clipboard", value).apply()
+
     var haptics: Boolean
         get() = prefs.getBoolean("haptics", true)
         set(value) = prefs.edit().putBoolean("haptics", value).apply()

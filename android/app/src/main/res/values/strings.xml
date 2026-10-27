@@ -85,6 +85,28 @@
     <string name="notification_toggle_on">Keyboard to Computer</string>
     <string name="notification_toggle_off">Keyboard to Phone</string>
 
+    <!-- Clipboard and files -->
+    <string name="share_clipboard_switch">Share Clipboard</string>
+    <string name="files_button">Files</string>
+    <string name="clipboard_files_sent">Copied %1$s to %2$s.</string>
+    <string name="clipboard_files_received">Copied %1$s from %2$s.</string>
+    <string name="clipboard_files_too_big">%1$s copied on %3$s, %2$s: too large to copy here. Download them in Files.</string>
+    <string name="files_title">Files on %1$s</string>
+    <string name="files_send">Send Files</string>
+    <string name="files_places">Places</string>
+    <string name="files_parent">Parent folder</string>
+    <string name="files_folder">Folder</string>
+    <string name="files_open">Open</string>
+    <string name="files_download">Download</string>
+    <string name="files_loading">Loading.</string>
+    <string name="files_listing">%1$s, %2$d items.</string>
+    <string name="files_busy">A transfer is already running.</string>
+    <string name="files_progress">%1$s: %2$d percent.</string>
+    <string name="files_downloading">Downloading %1$s.</string>
+    <string name="files_downloaded">Saved %1$s to %2$s.</string>
+    <string name="files_sending">Sending %1$s.</string>
+    <string name="files_sent">Sent %1$s to Downloads on %2$s.</string>
+
     <!-- Keys -->
     <string name="keys_title">Keys and Shortcuts</string>
     <string name="keys_target">Keys go to %1$s.</string>
@@ -139,4 +161,8 @@
     <string name="release_ctrl_shift_f12">Control-Shift-F12</string>
     <string name="release_scroll_lock">Scroll Lock</string>
     <string name="release_pause">Pause</string>
+    <plurals name="files">
+        <item quantity="one">%d file</item>
+        <item quantity="other">%d files</item>
+    </plurals>
 </resources>

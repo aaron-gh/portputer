@@ -42,6 +42,10 @@
             android:label="@string/keys_title"
             android:parentActivityName=".ConnectedActivity" />
         <activity
+            android:name=".FilesActivity"
+            android:exported="false"
+            android:parentActivityName=".ConnectedActivity" />
+        <activity
             android:name=".PowerActivity"
             android:exported="false"
             android:label="@string/power_title"
@@ -51,6 +55,17 @@
             android:exported="false"
             android:label="@string/settings_title"
             android:parentActivityName=".ComputersActivity" />
+
+        <!-- Files copied on the computer, offered on the phone's clipboard. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="io.github.aaron_gh.portputer.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <service
             android:name=".KeyboardService"

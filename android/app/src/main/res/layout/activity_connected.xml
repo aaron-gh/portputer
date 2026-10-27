@@ -162,6 +162,19 @@
                     android:layout_height="wrap_content"
                     android:text="@string/keys_button" />
 
+                <Switch
+                    android:id="@+id/share_clipboard"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:text="@string/share_clipboard_switch" />
+
+                <Button
+                    android:id="@+id/files"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/files_button" />
+
                 <Button
                     android:id="@+id/text"
                     android:layout_width="match_parent"
