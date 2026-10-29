@@ -66,6 +66,10 @@ pub fn new_injector(session: SessionKind) -> Box<dyn Injector> {
         return Box::new(macos::ChildInjector::new());
     }
     #[cfg(target_os = "macos")]
+    if session == SessionKind::User {
+        return Box::new(macos::UserInjector::new());
+    }
+    #[cfg(target_os = "macos")]
     return Box::new(macos::MacInjector::new(session));
     #[cfg(windows)]
     return Box::new(windows::WinInjector::new(session));

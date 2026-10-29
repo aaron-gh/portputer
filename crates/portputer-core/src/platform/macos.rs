@@ -176,6 +176,102 @@ impl Injector for MacInjector {
     }
 }
 
+/// Whether the user's screen is locked (CGSSessionScreenIsLocked).
+pub fn screen_locked() -> bool {
+    let Some(session) = objc2_core_graphics::CGSessionCopyCurrentDictionary() else { return false };
+    let key = objc2_core_foundation::CFString::from_static_str("CGSSessionScreenIsLocked");
+    let value = unsafe { session.value(&*key as *const _ as *const std::ffi::c_void) };
+    !value.is_null() && unsafe { &*(value as *const objc2_core_foundation::CFBoolean) }.value()
+}
+
+/// Keys in the user's session. On the lock screen, Quartz events don't reach
+/// the password field (keys there beep), so while the screen is locked keys
+/// go through IOKit's HID system (platform::hid), as at the login window.
+pub struct UserInjector {
+    quartz: MacInjector,
+    hid: Option<super::hid::HidInjector>,
+    /// Keys pressed through the HID system, released the same way.
+    hid_keys: Vec<String>,
+    logged: bool,
+}
+
+impl UserInjector {
+    pub fn new() -> UserInjector {
+        UserInjector { quartz: MacInjector::new(SessionKind::User), hid: None, hid_keys: Vec::new(), logged: false }
+    }
+
+    /// The HID injector if the screen is locked and it opens.
+    fn locked_hid(&mut self) -> Option<&mut super::hid::HidInjector> {
+        if !screen_locked() {
+            return None;
+        }
+        if self.hid.is_none() {
+            match super::hid::HidInjector::open() {
+                Ok(h) => self.hid = Some(h),
+                Err(e) => {
+                    if !std::mem::replace(&mut self.logged, true) {
+                        tracing::warn!("screen locked; IOKit's HID system isn't available ({e})");
+                    }
+                    return None;
+                }
+            }
+            tracing::info!("screen locked: keys through IOKit's HID system");
+        }
+        self.hid.as_mut()
+    }
+}
+
+impl Default for UserInjector {
+    fn default() -> Self {
+        UserInjector::new()
+    }
+}
+
+impl Injector for UserInjector {
+    fn key(&mut self, code: &str, down: bool) -> bool {
+        let through_hid = if down { self.locked_hid().is_some() } else { self.hid_keys.iter().any(|c| c == code) };
+        self.hid_keys.retain(|c| c != code);
+        if through_hid {
+            if down {
+                self.hid_keys.push(code.to_string());
+            }
+            self.hid.as_mut().is_some_and(|h| h.key(code, down))
+        } else {
+            self.quartz.key(code, down)
+        }
+    }
+
+    fn repeat(&mut self, code: &str) -> bool {
+        if self.hid_keys.iter().any(|c| c == code) {
+            self.hid.as_mut().is_some_and(|h| h.repeat(code))
+        } else {
+            self.quartz.repeat(code)
+        }
+    }
+
+    fn text(&mut self, text: &str) {
+        match self.locked_hid() {
+            Some(hid) => hid.text(text),
+            None => self.quartz.text(text),
+        }
+    }
+
+    fn release_all(&mut self) {
+        self.quartz.release_all();
+        if let Some(hid) = self.hid.as_mut() {
+            hid.release_all();
+        }
+        self.hid_keys.clear();
+    }
+
+    fn tap(&mut self, code: &str, modifiers: &[String]) -> bool {
+        match self.locked_hid() {
+            Some(hid) => hid.tap(code, modifiers),
+            None => self.quartz.tap(code, modifiers),
+        }
+    }
+}
+
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
     fn AXIsProcessTrusted() -> bool;
