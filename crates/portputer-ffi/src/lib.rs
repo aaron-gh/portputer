@@ -1,5 +1,5 @@
-//! The bridge between Portputer's Rust core and its Swift (Mac) and Kotlin
-//! (Android) apps. UniFFI generates the bindings from this file. Calls that
+//! The bridge between Portputer's Rust core and its Swift (Mac, iOS) and
+//! Kotlin (Android) apps. UniFFI generates the bindings from this file. Calls that
 //! wait on the network (connecting, pairing) block, so call them off the
 //! main thread. Listeners are called from the core's threads.
 
@@ -169,6 +169,20 @@ pub fn code_for_mac_key(key_code: u16) -> Option<String> {
     keys::from_mac(key_code).map(String::from)
 }
 
+/// The code for an iOS key press: by physical position (the HID usage, from
+/// `UIKey.keyCode`) when `by_position`, otherwise by the character the key
+/// types without modifiers in this device's layout, where a US key types it.
+#[uniffi::export]
+pub fn code_for_ios_key(hid_usage: u16, characters: String, by_position: bool) -> Option<String> {
+    let by_char = || {
+        let mut chars = characters.chars();
+        let c = chars.next().filter(|_| chars.next().is_none())?;
+        keys::us_key_for_char(c.to_ascii_lowercase()).map(|(code, _)| code)
+    };
+    let found = if by_position { keys::from_hid(hid_usage) } else { by_char().or_else(|| keys::from_hid(hid_usage)) };
+    found.map(String::from)
+}
+
 #[uniffi::export]
 pub fn is_modifier_code(code: String) -> bool {
     keys::is_modifier(&code)
@@ -232,6 +246,27 @@ impl Discovery {
     pub fn stop(&self) {
         self.browser.lock().unwrap().take();
     }
+}
+
+/// A server resolved by the app's own Bonjour browsing (iOS, where the core
+/// can't browse): its full name, TXT record, addresses and port. Noted for
+/// reconnecting; None if it isn't a Portputer server.
+#[uniffi::export]
+pub fn network_found(
+    fullname: String,
+    txt: std::collections::HashMap<String, String>,
+    addresses: Vec<String>,
+    port: u16,
+) -> Option<Advertisement> {
+    let ips = addresses.iter().filter_map(|a| a.parse().ok()).collect();
+    let ad = discovery::server_ad(&fullname, |k| txt.get(k).cloned().unwrap_or_default(), ips, port)?;
+    client::note_seen(BrowseEvent::Found(ad.clone()));
+    Some(ad.into())
+}
+
+#[uniffi::export]
+pub fn network_lost(fullname: String) {
+    client::note_seen(BrowseEvent::Lost(fullname));
 }
 
 #[uniffi::export]

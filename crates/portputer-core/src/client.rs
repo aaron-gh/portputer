@@ -14,7 +14,9 @@ use tokio::sync::mpsc;
 
 use crate::Error;
 use crate::audio::{self, Playback};
-use crate::discovery::{BrowseEvent, Browser, ServerAd};
+#[cfg(not(target_os = "ios"))]
+use crate::discovery::Browser;
+use crate::discovery::{BrowseEvent, ServerAd};
 use crate::identity::{ClientStore, Identity, KnownServer, constant_time_eq, id_of, now_secs, proof};
 use crate::jitter::{JitterBuffer, JitterStats};
 use crate::keys::Os;
@@ -147,23 +149,28 @@ struct Conn {
 /// Servers seen on the network, by ID, for reconnecting at new addresses.
 fn seen() -> &'static Mutex<HashMap<String, Vec<ServerAd>>> {
     static SEEN: OnceLock<Mutex<HashMap<String, Vec<ServerAd>>>> = OnceLock::new();
-    static BROWSER: OnceLock<Option<Browser>> = OnceLock::new();
     let map = SEEN.get_or_init(Default::default);
-    BROWSER.get_or_init(|| {
-        Browser::start(|event| {
-            let mut map = seen().lock().unwrap();
-            match event {
-                BrowseEvent::Found(ad) => {
-                    let list = map.entry(ad.id.clone()).or_default();
-                    list.retain(|a| a.fullname != ad.fullname);
-                    list.push(ad);
-                }
-                BrowseEvent::Lost(fullname) => map.values_mut().for_each(|l| l.retain(|a| a.fullname != fullname)),
-            }
-        })
-        .ok()
-    });
+    // On iOS, multicast sockets need an entitlement, so the app browses with
+    // Bonjour and passes what it finds to note_seen.
+    #[cfg(not(target_os = "ios"))]
+    {
+        static BROWSER: OnceLock<Option<Browser>> = OnceLock::new();
+        BROWSER.get_or_init(|| Browser::start(note_seen).ok());
+    }
     map
+}
+
+/// A server found or lost on the network, for reconnecting at new addresses.
+pub fn note_seen(event: BrowseEvent) {
+    let mut map = seen().lock().unwrap();
+    match event {
+        BrowseEvent::Found(ad) => {
+            let list = map.entry(ad.id.clone()).or_default();
+            list.retain(|a| a.fullname != ad.fullname);
+            list.push(ad);
+        }
+        BrowseEvent::Lost(fullname) => map.values_mut().for_each(|l| l.retain(|a| a.fullname != fullname)),
+    }
 }
 
 /// Where a server is reached: on the network, or through the internet relay.

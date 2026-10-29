@@ -1,0 +1,42 @@
+# The Portputer iOS app. ios/build.sh builds the Rust core and its Swift
+# bindings, then generates Portputer.xcodeproj from this file.
+name: Portputer
+options:
+  bundleIdPrefix: io.github.aaron-gh
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: "Apple Development"
+    DEVELOPMENT_TEAM: 233BS6WL4H
+    MARKETING_VERSION: ${PORTPUTER_VERSION}
+    CURRENT_PROJECT_VERSION: ${PORTPUTER_BUILD_NUMBER}
+
+targets:
+  Portputer:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/Portputer
+    settings:
+      base:
+        PRODUCT_NAME: Portputer
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.aaron-gh.portputer
+        INFOPLIST_FILE: Support/Info.plist
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        OTHER_LDFLAGS: $(inherited) -lc++
+        # The Rust core is built for Apple silicon simulators only.
+        EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
+    dependencies:
+      - framework: Frameworks/PortputerFFI.xcframework
+        embed: false
+      - sdk: AudioToolbox.framework
+      - sdk: AVFoundation.framework
+      - sdk: CoreAudio.framework
+      - sdk: SystemConfiguration.framework
+      - sdk: Security.framework

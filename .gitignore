@@ -14,3 +14,7 @@
 /windows/dist
 /macos/dist
 /android/dist
+/ios/build
+/ios/Frameworks
+/ios/Portputer.xcodeproj
+/ios/Sources/Portputer/Generated

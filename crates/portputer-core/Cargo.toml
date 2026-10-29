@@ -14,7 +14,6 @@ hex = "0.4.3"
 hmac = "0.13.0"
 md5 = { package = "md-5", version = "0.11.0" }
 if-addrs = "0.15.0"
-mac_address = "1.2.1"
 mdns-sd = "0.21.6"
 rand_core = "0.10.1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
@@ -37,6 +36,10 @@ objc2-core-audio-types = { version = "0.3", default-features = false, features =
 objc2-core-foundation = "0.3.2"
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGEvent", "CGEventSource", "CGEventTypes", "CGRemoteOperation", "CGSession", "objc2"] }
 objc2-foundation = { version = "0.3.2", features = ["NSURL", "NSArray", "NSString"] }
+
+# Not on iOS, which doesn't give apps hardware addresses; only servers announce them.
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+mac_address = "1.2.1"
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.191"

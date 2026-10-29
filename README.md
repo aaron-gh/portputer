@@ -1,6 +1,6 @@
 # Portputer
 
-Portputer controls a Mac or Windows computer from an Android phone, or from another computer. It sends every key of a physical keyboard, plays the computer's audio on the phone, sends the phone's microphone to the computer, and keeps the two clipboards in step. It can also restart the computer and type at the Mac login window. It works with screen readers throughout: TalkBack, VoiceOver and NVDA.
+Portputer controls a Mac or Windows computer from an Android phone, an iPhone or iPad, or another computer. It sends every key of a physical keyboard, plays the computer's audio on the phone, sends the phone's microphone to the computer, and keeps the two clipboards in step. It can also restart the computer and type at the Mac login window. It works with screen readers throughout: TalkBack, VoiceOver and NVDA.
 
 ## Getting started
 
@@ -29,6 +29,18 @@ The connection stays up with the screen off, and reconnects by itself: after a r
 With TalkBack on, TalkBack also receives the external keyboard's keys, so a TalkBack keyboard shortcut also acts on the phone.
 
 Settings, at the bottom, shows the Portputer version.
+
+## On an iPhone or iPad
+
+The same as on an Android phone, with these differences, which iOS sets:
+
+- **Send Keyboard to Computer:** a switch, kept across connections. While it's on, keys from a hardware keyboard go to the computer while Portputer is open. There is no shortcut to switch back. iOS keeps its own shortcuts, such as Command-Tab, Command-Space and Globe key combinations, and while VoiceOver is on, VoiceOver's keyboard commands, so VoiceOver is usually turned off while the keyboard is sent.
+- **In the background:** the connection, Computer Audio and Send Microphone continue while the computer's audio or the microphone is on. Otherwise iOS suspends Portputer soon after it leaves the screen, and it reconnects when opened.
+- **Share Clipboard:** the clipboard is read when it changes while Portputer is open, and when Portputer comes to the front. iOS asks before each read unless Paste from Other Apps is set to Allow, in iOS Settings, Apps, Portputer.
+- **Files:** downloads go to Portputer's folder in the Files app, under On My iPhone.
+- **Wake** (Wake on LAN) isn't available: iOS needs an entitlement from Apple for the broadcast packets it sends.
+
+Needs iOS 17 or later. Updates come through the App Store or TestFlight.
 
 ## On a Mac
 
@@ -84,7 +96,7 @@ Updates are signed, and each app checks the signature before installing.
 
 ## Telling me about a problem
 
-Include the version: on the phone, Settings, at the bottom; on a Mac, the menu bar menu or Settings, About; on Windows, the window title.
+Include the version: on the phone or iPad, Settings, at the bottom; on a Mac, the menu bar menu or Settings, About; on Windows, the window title.
 
 ## Building from source
 
@@ -96,11 +108,13 @@ Include the version: on the phone, Settings, at the bottom; on a Mac, the menu b
 | `crates/portputer-windows` | Windows app |
 | `macos/` | Mac app, and the Portputer Microphone driver |
 | `android/` | Android app |
+| `ios/` | iPhone and iPad app |
 | `relay/` | Internet relay, a Cloudflare Worker |
 | `docs/PROTOCOL.md` | Wire protocol |
 
 - Mac: `macos/build.sh`, into `macos/build/Portputer.app`. `macos/make-certificate.sh` makes the "Portputer Code Signing" certificate once, so macOS keeps permissions across builds.
 - Android: `android/gradlew -p android :app:assembleDebug`. Needs Rust's `aarch64-linux-android` and `x86_64-linux-android` targets and the Android NDK.
+- iOS: `ios/build.sh`, which builds the Rust core into `ios/Frameworks`, generates `ios/Portputer.xcodeproj` with XcodeGen (`brew install xcodegen`) and builds the app; `--rust-only` stops before Xcode, `--simulator` builds for the simulator. Needs Rust's `aarch64-apple-ios` and `aarch64-apple-ios-sim` targets, and Xcode's iOS platform.
 - Windows, built on a Mac: `windows/build.sh`. Needs MinGW-w64 (`brew install mingw-w64`).
 - Tests: `cargo test -p portputer-core`.
 

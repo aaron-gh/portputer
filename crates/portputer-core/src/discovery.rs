@@ -85,6 +85,41 @@ pub enum BrowseEvent {
     Lost(String),
 }
 
+/// A server's advertisement from its resolved service: full name, TXT
+/// record properties, addresses and port. None without an ID.
+pub fn server_ad(fullname: &str, prop: impl Fn(&str) -> String, addresses: Vec<std::net::IpAddr>, port: u16) -> Option<ServerAd> {
+    let id = prop("id");
+    if id.is_empty() {
+        return None;
+    }
+    let mut addresses: Vec<String> = addresses
+        .into_iter()
+        // Link-local IPv6 needs a scope to connect to.
+        .filter(|a| !a.is_loopback() && !matches!(a, std::net::IpAddr::V6(v6) if v6.is_unicast_link_local()))
+        .map(|a| a.to_string())
+        .collect();
+    addresses.sort_by_key(|a| a.contains(':'));
+    addresses.dedup();
+    let os = match prop("os").as_str() {
+        "mac" => Os::Mac,
+        "windows" => Os::Windows,
+        _ => Os::Other,
+    };
+    let session = if prop("session") == "login_window" { SessionKind::LoginWindow } else { SessionKind::User };
+    let name = Some(prop("name")).filter(|n| !n.is_empty()).unwrap_or_else(|| fullname.split('.').next().unwrap_or("").to_string());
+    Some(ServerAd {
+        fullname: fullname.to_string(),
+        id,
+        name,
+        os,
+        session,
+        user: prop("user"),
+        addresses,
+        port,
+        macs: prop("macs").split(',').filter(|m| !m.is_empty()).map(String::from).collect(),
+    })
+}
+
 pub struct Browser {
     daemon: ServiceDaemon,
     stop: Arc<AtomicBool>,
@@ -105,40 +140,10 @@ impl Browser {
                 match event {
                     ServiceEvent::ServiceResolved(service) => {
                         let prop = |k: &str| service.get_property_val_str(k).unwrap_or("").to_string();
-                        let id = prop("id");
-                        if id.is_empty() {
-                            continue;
+                        let addresses = service.get_addresses().iter().map(|a| a.to_ip_addr()).collect();
+                        if let Some(ad) = server_ad(service.get_fullname(), prop, addresses, service.get_port()) {
+                            on_event(BrowseEvent::Found(ad));
                         }
-                        let mut addresses: Vec<String> = service
-                            .get_addresses()
-                            .iter()
-                            .map(|a| a.to_ip_addr())
-                            // Link-local IPv6 needs a scope to connect to.
-                            .filter(|a| !a.is_loopback() && !matches!(a, std::net::IpAddr::V6(v6) if v6.is_unicast_link_local()))
-                            .map(|a| a.to_string())
-                            .collect();
-                        addresses.sort_by_key(|a| a.contains(':'));
-                        addresses.dedup();
-                        let os = match prop("os").as_str() {
-                            "mac" => Os::Mac,
-                            "windows" => Os::Windows,
-                            _ => Os::Other,
-                        };
-                        let session = if prop("session") == "login_window" { SessionKind::LoginWindow } else { SessionKind::User };
-                        let name = Some(prop("name")).filter(|n| !n.is_empty()).unwrap_or_else(|| {
-                            service.get_fullname().split('.').next().unwrap_or("").to_string()
-                        });
-                        on_event(BrowseEvent::Found(ServerAd {
-                            fullname: service.get_fullname().to_string(),
-                            id,
-                            name,
-                            os,
-                            session,
-                            user: prop("user"),
-                            addresses,
-                            port: service.get_port(),
-                            macs: prop("macs").split(',').filter(|m| !m.is_empty()).map(String::from).collect(),
-                        }));
                     }
                     ServiceEvent::ServiceRemoved(_, fullname) => on_event(BrowseEvent::Lost(fullname)),
                     _ => {}
@@ -176,6 +181,7 @@ pub fn computer_name() -> String {
 
 /// The hardware addresses of the network interfaces with an IPv4 address,
 /// for Wake on LAN.
+#[cfg(not(target_os = "ios"))]
 pub fn hardware_addresses() -> Vec<String> {
     let mut out = vec![];
     let names: Vec<String> = if_addrs::get_if_addrs()
@@ -193,4 +199,9 @@ pub fn hardware_addresses() -> Vec<String> {
         }
     }
     out
+}
+
+#[cfg(target_os = "ios")]
+pub fn hardware_addresses() -> Vec<String> {
+    vec![]
 }

@@ -236,6 +236,88 @@ pub fn from_windows_vk(vk: u16) -> Option<&'static str> {
     KEYS.iter().find(|k| k.win == WinKey::Vk(vk)).map(|k| k.code)
 }
 
+/// The code of a key from its USB HID usage on the keyboard page (0x07),
+/// which iOS reports as `UIKey.keyCode`.
+pub fn from_hid(usage: u16) -> Option<&'static str> {
+    const LETTERS: [&str; 26] = [
+        "KeyA", "KeyB", "KeyC", "KeyD", "KeyE", "KeyF", "KeyG", "KeyH", "KeyI", "KeyJ", "KeyK", "KeyL", "KeyM", "KeyN",
+        "KeyO", "KeyP", "KeyQ", "KeyR", "KeyS", "KeyT", "KeyU", "KeyV", "KeyW", "KeyX", "KeyY", "KeyZ",
+    ];
+    const DIGITS: [&str; 10] = ["Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6", "Digit7", "Digit8", "Digit9", "Digit0"];
+    const FUNCTION: [&str; 12] = ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"];
+    const FUNCTION_HIGH: [&str; 12] = ["F13", "F14", "F15", "F16", "F17", "F18", "F19", "F20", "F21", "F22", "F23", "F24"];
+    const KEYPAD: [&str; 10] = ["Numpad1", "Numpad2", "Numpad3", "Numpad4", "Numpad5", "Numpad6", "Numpad7", "Numpad8", "Numpad9", "Numpad0"];
+    Some(match usage {
+        0x04..=0x1D => LETTERS[usage as usize - 0x04],
+        0x1E..=0x27 => DIGITS[usage as usize - 0x1E],
+        0x28 => "Enter",
+        0x29 => "Escape",
+        0x2A => "Backspace",
+        0x2B => "Tab",
+        0x2C => "Space",
+        0x2D => "Minus",
+        0x2E => "Equal",
+        0x2F => "BracketLeft",
+        0x30 => "BracketRight",
+        // 0x32 is the ISO key beside Enter, which the W3C also names Backslash.
+        0x31 | 0x32 => "Backslash",
+        0x33 => "Semicolon",
+        0x34 => "Quote",
+        0x35 => "Backquote",
+        0x36 => "Comma",
+        0x37 => "Period",
+        0x38 => "Slash",
+        0x39 => "CapsLock",
+        0x3A..=0x45 => FUNCTION[usage as usize - 0x3A],
+        0x46 => "PrintScreen",
+        0x47 => "ScrollLock",
+        0x48 => "Pause",
+        0x49 => "Insert",
+        0x4A => "Home",
+        0x4B => "PageUp",
+        0x4C => "Delete",
+        0x4D => "End",
+        0x4E => "PageDown",
+        0x4F => "ArrowRight",
+        0x50 => "ArrowLeft",
+        0x51 => "ArrowDown",
+        0x52 => "ArrowUp",
+        0x53 => "NumLock",
+        0x54 => "NumpadDivide",
+        0x55 => "NumpadMultiply",
+        0x56 => "NumpadSubtract",
+        0x57 => "NumpadAdd",
+        0x58 => "NumpadEnter",
+        0x59..=0x62 => KEYPAD[usage as usize - 0x59],
+        0x63 => "NumpadDecimal",
+        0x64 => "IntlBackslash",
+        0x65 => "ContextMenu",
+        0x67 => "NumpadEqual",
+        0x68..=0x73 => FUNCTION_HIGH[usage as usize - 0x68],
+        0x75 => "Help",
+        0x7F => "AudioVolumeMute",
+        0x80 => "AudioVolumeUp",
+        0x81 => "AudioVolumeDown",
+        0x85 => "NumpadComma",
+        0x87 => "IntlRo",
+        0x88 => "KanaMode",
+        0x89 => "IntlYen",
+        0x8A => "Convert",
+        0x8B => "NonConvert",
+        0x90 => "Lang1",
+        0x91 => "Lang2",
+        0xE0 => "ControlLeft",
+        0xE1 => "ShiftLeft",
+        0xE2 => "AltLeft",
+        0xE3 => "MetaLeft",
+        0xE4 => "ControlRight",
+        0xE5 => "ShiftRight",
+        0xE6 => "AltRight",
+        0xE7 => "MetaRight",
+        _ => return None,
+    })
+}
+
 pub fn is_modifier(code: &str) -> bool {
     matches!(
         code,
@@ -519,6 +601,22 @@ mod tests {
         assert_eq!(from_android(67), Some("Backspace"));
         assert_eq!(from_android(112), Some("Delete"));
         assert_eq!(from_evdev(0), None);
+    }
+
+    #[test]
+    fn hid_mappings() {
+        assert_eq!(from_hid(0x04), Some("KeyA"));
+        assert_eq!(from_hid(0x27), Some("Digit0"));
+        assert_eq!(from_hid(0x45), Some("F12"));
+        assert_eq!(from_hid(0x62), Some("Numpad0"));
+        assert_eq!(from_hid(0x73), Some("F24"));
+        assert_eq!(from_hid(0xE3), Some("MetaLeft"));
+        assert_eq!(from_hid(0x00), None);
+        for usage in 0..=0xFF {
+            if let Some(code) = from_hid(usage) {
+                assert!(by_code(code).is_some(), "{code}");
+            }
+        }
     }
 
     #[test]
