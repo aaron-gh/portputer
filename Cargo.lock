@@ -1334,7 +1334,7 @@ dependencies = [
 
 [[package]]
 name = "portputer-agent"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "libc",
  "portputer-core",
@@ -1345,7 +1345,7 @@ dependencies = [
 
 [[package]]
 name = "portputer-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "chacha20poly1305 0.11.0",
  "cpal",
@@ -1384,7 +1384,7 @@ dependencies = [
 
 [[package]]
 name = "portputer-ffi"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "android_logger",
  "log",
@@ -1396,7 +1396,7 @@ dependencies = [
 
 [[package]]
 name = "portputer-windows"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "embed-resource",
  "portputer-core",
