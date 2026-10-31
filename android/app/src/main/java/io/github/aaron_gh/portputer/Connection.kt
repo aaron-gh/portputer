@@ -307,6 +307,9 @@ object Connection {
 
         override fun closed(reason: String) = post {
             val name = info?.name ?: (state as? State.Connecting)?.target?.name ?: ""
+            // Stopped before the session is closed: a listener left on the
+            // clipboard would call the closed session and crash.
+            clipboard?.stop()
             clipboard = null
             session?.close()
             session = null
