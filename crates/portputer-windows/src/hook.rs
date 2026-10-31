@@ -99,6 +99,13 @@ fn is_down(vk: i32) -> bool {
     unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk) as u16 & 0x8000 != 0 }
 }
 
+/// Whether any of the keys is held. Keys the hook took aren't in Windows'
+/// key state, so they're found among the keys sent; keys pressed before
+/// capture started are in Windows' key state.
+fn held(h: &Hook, codes: &[&str], vks: &[i32]) -> bool {
+    h.sent.values().any(|c| codes.contains(&c.as_str())) || vks.iter().any(|&vk| is_down(vk))
+}
+
 unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let pass = || unsafe { CallNextHookEx(None, code, wparam, lparam) };
     if code < 0 {
@@ -126,7 +133,10 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
             return false;
         }
         // Control-Windows-Escape.
-        if info.vkCode == VK_ESCAPE && is_down(0x11) && (is_down(0x5B) || is_down(0x5C)) {
+        if info.vkCode == VK_ESCAPE
+            && held(h, &["ControlLeft", "ControlRight"], &[0x11])
+            && held(h, &["MetaLeft", "MetaRight"], &[0x5B, 0x5C])
+        {
             h.swallowed.insert(id);
             let escape = h.handlers.escape;
             ui::run_on_ui(escape);
