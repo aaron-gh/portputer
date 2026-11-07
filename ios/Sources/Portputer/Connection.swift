@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import UIKit
 
 /// A computer in the list: paired, found on the network, or both.
 struct Computer: Identifiable, Equatable {
@@ -46,7 +47,10 @@ final class Connection: ObservableObject {
         case closed(name: String, reason: String)
     }
 
-    @Published private(set) var state: State = .idle
+    @Published private(set) var state: State = .idle {
+        // The screen stays on while connected to a computer.
+        didSet { UIApplication.shared.isIdleTimerDisabled = info != nil }
+    }
     @Published private(set) var computers: [Computer] = []
     @Published private(set) var audioOn = false
     @Published private(set) var audioWanted = false
