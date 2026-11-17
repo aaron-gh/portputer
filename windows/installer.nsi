@@ -67,7 +67,11 @@ VIAddVersionKey "LegalCopyright" "Apache License 2.0"
 Section "Install"
     !insertmacro WaitForPortputerToQuit
     SetOutPath "$INSTDIR"
-    File /r "${STAGE}/*"
+    !ifdef NSIS_WIN32_MAKENSIS
+        File /r "${STAGE}\*"
+    !else
+        File /r "${STAGE}/*"
+    !endif
     WriteUninstaller "$INSTDIR\Uninstall.exe"
 
     CreateShortcut "$SMPROGRAMS\${NAME}.lnk" "$INSTDIR\${EXE}"
@@ -90,6 +94,12 @@ SectionEnd
 
 Section "Uninstall"
     !insertmacro WaitForPortputerToQuit
+    IfFileExists "$PROGRAMFILES64\Portputer Secure Input\config.json" 0 secure_input_removed
+        ExecShellWait "runas" "$INSTDIR\portputer-input-service.exe" "--uninstall" SW_HIDE
+        IfFileExists "$PROGRAMFILES64\Portputer Secure Input\config.json" 0 secure_input_removed
+            MessageBox MB_OK|MB_ICONEXCLAMATION "Windows administrator permission is needed to remove lock-screen support. Uninstall was cancelled."
+            Abort
+    secure_input_removed:
     Delete "$SMPROGRAMS\${NAME}.lnk"
     ; Start at login.
     DeleteRegValue HKCU "${RUN_KEY}" "Portputer"
@@ -97,6 +107,7 @@ Section "Uninstall"
     ; folder with others. Pairings and settings stay in Portputer's data folder.
     Delete "$INSTDIR\Portputer.exe"
     Delete "$INSTDIR\portputer-agent.exe"
+    Delete "$INSTDIR\portputer-input-service.exe"
     Delete "$INSTDIR\nvdaControllerClient.dll"
     Delete "$INSTDIR\WinSparkle.dll"
     Delete "$INSTDIR\LICENSE.txt"

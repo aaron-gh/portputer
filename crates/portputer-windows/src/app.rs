@@ -25,6 +25,8 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 mod id {
     pub const ACCEPT: u16 = 101;
     pub const STARTUP: u16 = 102;
+    pub const SECURE_INPUT: u16 = 110;
+    pub const SECURE_UPDATE: u16 = 111;
     pub const PAIR_NEW: u16 = 103;
     pub const CODE: u16 = 104;
     pub const PAIRED: u16 = 105;
@@ -67,6 +69,9 @@ struct Controls {
     server_heading: HWND,
     accept: HWND,
     startup: HWND,
+    secure_input: HWND,
+    secure_status: HWND,
+    secure_update: HWND,
     server_status: HWND,
     pair_new: HWND,
     code_label: HWND,
@@ -186,6 +191,7 @@ struct App {
     menu_keys: Vec<keys::MenuKey>,
     reach: HashMap<String, portputer_core::client::Reachability>,
     probing: bool,
+    secure_busy: bool,
 }
 
 thread_local! {
@@ -241,6 +247,25 @@ fn set_start_at_login(on: bool) {
     let _ = command.creation_flags(0x0800_0000).status();
 }
 
+pub(crate) fn secure_input_finished(on: bool, success: bool) {
+    with_app(|a| {
+        a.secure_busy = false;
+        a.refresh();
+        if success {
+            let destination=crate::secure_input::destination(on);
+            let restart=destination.as_ref().is_some_and(|p| std::env::current_exe().ok().as_ref()!=Some(p));
+            if restart {
+                match crate::secure_input::relaunch(on) {
+                    Ok(())=>unsafe{let _=PostMessageW(Some(a.hwnd),WM_COMMAND,WPARAM(id::QUIT as usize),LPARAM(0));},
+                    Err(e)=>speech::status(a.c.secure_status,&e),
+                }
+            } else {
+                speech::status(a.c.secure_status,if on{"Windows secure-screen access is enabled."}else{"Windows secure-screen access is disabled."});
+            }
+        } else { speech::status(a.c.secure_status,"Could not change secure screen access. Windows administrator permission is required."); }
+    });
+}
+
 struct ServerEvents;
 
 impl ServerObserver for ServerEvents {
@@ -273,6 +298,9 @@ impl App {
             server_heading: l("This computer"),
             accept: ui::checkbox(hwnd, "Accept connections from paired devices", id::ACCEPT),
             startup: ui::checkbox(hwnd, "Start at login", id::STARTUP),
+            secure_input: ui::checkbox(hwnd, "Allow on Windows secure screens", id::SECURE_INPUT),
+            secure_status: l(""),
+            secure_update: ui::button(hwnd, "Update secure-screen support", id::SECURE_UPDATE),
             server_status: l(""),
             pair_new: ui::button(hwnd, "Pair New Device", id::PAIR_NEW),
             code_label: l("Pairing code"),
@@ -323,6 +351,7 @@ impl App {
         ui::set_checked(c.relay_on, home.enabled);
         ui::set_text(c.relay_url, home.custom_url.as_deref().unwrap_or(""));
         speech::make_live_region(c.server_status);
+        speech::make_live_region(c.secure_status);
         speech::make_live_region(c.status);
         c
     }
@@ -337,6 +366,9 @@ impl App {
         let h = 24;
         f.row(&[(c.server_heading, 1)], h);
         f.row(&[(c.accept, 2), (c.startup, 1)], h);
+        f.row(&[(c.secure_input, 1)], h);
+        f.row(&[(c.secure_status, 1)], h);
+        if crate::secure_input::enabled() && !crate::secure_input::protected() {f.row(&[(c.secure_update,1)],h+4);}
         f.row(&[(c.server_status, 1)], h);
         f.row(&[(c.pair_new, 1), (c.code_label, 1), (c.code, 2)], h + 2);
         f.row(&[(c.paired_label, 1)], h);
@@ -369,6 +401,14 @@ impl App {
     /// Shows the controls that apply now.
     fn refresh(&mut self) {
         let c = &self.c;
+        if !self.secure_busy {
+            let secure=crate::secure_input::enabled();
+            ui::set_checked(c.secure_input,secure);
+            ui::set_text(c.secure_status,if secure {"Applies to logon and other Windows secure screens."}else{"Administrator permission is required."});
+        }
+        ui::enable(c.secure_input,!self.secure_busy);
+        ui::enable(c.secure_update,!self.secure_busy);
+        ui::show(c.secure_update,crate::secure_input::enabled()&&!crate::secure_input::protected());
         let running = self.server.is_some();
         ui::set_checked(c.accept, running);
         ui::enable(c.pair_new, running);
@@ -786,6 +826,15 @@ impl App {
                 self.refresh();
             }
             id::STARTUP => set_start_at_login(ui::checked(self.c.startup)),
+            id::SECURE_INPUT | id::SECURE_UPDATE => {
+                let on=control==id::SECURE_UPDATE || ui::checked(self.c.secure_input);
+                self.set_capturing(false);
+                match crate::secure_input::request(self.hwnd,on) {
+                    Ok(true)=>{self.secure_busy=true;ui::enable(self.c.secure_input,false);ui::enable(self.c.secure_update,false);speech::status(self.c.secure_status,"Changing secure screen access...");},
+                    Ok(false)=>self.refresh(),
+                    Err(e)=>{self.refresh();speech::status(self.c.secure_status,&e);},
+                }
+            }
             id::RELAY_SAVE | id::RELAY_ON => {
                 let enabled = ui::checked(self.c.relay_on);
                 let url = Some(ui::text(self.c.relay_url).trim().to_string()).filter(|u| !u.is_empty());
@@ -1140,6 +1189,7 @@ pub fn run() {
         ui::set_main_window(hwnd);
         crate::updates::start(VERSION);
         let controls = App::create_controls(hwnd);
+        if starts_at_login() {set_start_at_login(true);}
         ui::set_checked(controls.startup, starts_at_login());
         let browser = Browser::start(|event| {
             ui::run_on_ui(move || {
@@ -1176,6 +1226,7 @@ pub fn run() {
                 menu_keys: vec![],
                 reach: HashMap::new(),
                 probing: false,
+                secure_busy: false,
             })
         });
         with_app(|a| {

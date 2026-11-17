@@ -18,6 +18,8 @@ mod speech;
 mod ui;
 #[cfg(windows)]
 mod updates;
+#[cfg(windows)]
+mod secure_input;
 
 #[cfg(not(windows))]
 fn main() {
@@ -27,5 +29,6 @@ fn main() {
 
 #[cfg(windows)]
 fn main() {
+    secure_input::wait_for_previous_process();
     app::run();
 }
