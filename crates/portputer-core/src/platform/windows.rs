@@ -21,12 +21,21 @@ impl WinInjector {
     }
 }
 
-fn send(inputs: &[KEYBDINPUT]) {
+fn send(inputs: &[KEYBDINPUT]) -> bool {
+    // The optional local broker is installed separately with administrator
+    // consent. Pairing and remote/network traffic stay in this user process.
+    let events: Vec<_> = inputs.iter().map(|k| portputer_windows_input::KeyInput {
+        vk: k.wVk, scan: k.wScan, flags: k.dwFlags,
+    }).collect();
+    if let Some(result) = portputer_windows_input::win::try_send(&events) {
+        if !result { tracing::warn!("secure input broker rejected an input batch"); }
+        return result; // Never replay a partially injected batch on another desktop.
+    }
     let inputs: Vec<INPUT> = inputs
         .iter()
         .map(|ki| INPUT { r#type: INPUT_KEYBOARD, Anonymous: INPUT_0 { ki: *ki } })
         .collect();
-    unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32) };
+    unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32) == inputs.len() as u32 }
 }
 
 fn key_input(vk: u16, scan: u16, flags: u32) -> KEYBDINPUT {
@@ -43,13 +52,11 @@ fn post(def: &keys::KeyDef, down: bool) -> bool {
     match def.win {
         WinKey::Scan(scan) => {
             let extended = if scan & 0xFF00 == 0xE000 { KEYEVENTF_EXTENDEDKEY } else { 0 };
-            send(&[key_input(0, scan & 0xFF, KEYEVENTF_SCANCODE | extended | up)]);
-            true
+            send(&[key_input(0, scan & 0xFF, KEYEVENTF_SCANCODE | extended | up)])
         }
         WinKey::Vk(vk) => {
             let extended = if vk_extended(vk) { KEYEVENTF_EXTENDEDKEY } else { 0 };
-            send(&[key_input(vk, 0, extended | up)]);
-            true
+            send(&[key_input(vk, 0, extended | up)])
         }
         WinKey::None => false,
     }

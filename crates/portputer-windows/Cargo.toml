@@ -11,6 +11,7 @@ name = "Portputer"
 path = "src/main.rs"
 
 [target.'cfg(windows)'.dependencies]
+portputer-windows-input = { path = "../portputer-windows-input" }
 portputer-core = { path = "../portputer-core" }
 tracing = "0.1"
 
@@ -23,6 +24,7 @@ features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Ole",
     "Win32_System_Threading",
+    "Win32_System_Registry",
     "Win32_System_Variant",
     "Win32_UI_Accessibility",
     "Win32_UI_Controls",

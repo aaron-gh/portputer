@@ -38,14 +38,14 @@ fi
 
 export PORTPUTER_BUILD_NUMBER="${PORTPUTER_BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 0)}"
 echo "Building the Windows app, build $PORTPUTER_BUILD_NUMBER."
-"$CARGO" build --release --target "$TARGET" -p portputer-windows -p portputer-agent
+"$CARGO" build --release --target "$TARGET" -p portputer-windows -p portputer-agent -p portputer-windows-input
 
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 NAME="Portputer-$VERSION-windows-x64"
 STAGE="windows/build/$NAME"
 rm -rf "$STAGE"
 mkdir -p "$STAGE" windows/dist windows/build/cache
-cp "target/$TARGET/release/Portputer.exe" "target/$TARGET/release/portputer-agent.exe" "$STAGE/"
+cp "target/$TARGET/release/Portputer.exe" "target/$TARGET/release/portputer-agent.exe" "target/$TARGET/release/portputer-input-service.exe" "$STAGE/"
 
 # NV Access's NVDA controller client, which Portputer speaks through when
 # NVDA is running. Pinned, and checked against its known checksum.
