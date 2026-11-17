@@ -27,6 +27,7 @@ final class KeyCaptureView: NSView {
                 window?.makeFirstResponder(self)
             } else {
                 releaseAll()
+                if window?.firstResponder === self { window?.makeFirstResponder(nil) }
             }
         }
     }
