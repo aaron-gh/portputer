@@ -27,6 +27,8 @@ impl Drop for StreamThread {
 pub struct Capture {
     pub rate: u32,
     pub channels: u16,
+    /// Set when the stream reports an error, such as the device going away.
+    pub failed: Arc<std::sync::atomic::AtomicBool>,
     _thread: StreamThread,
 }
 
@@ -46,6 +48,8 @@ pub fn start_capture(on_audio: impl FnMut(&[f32], usize) + Send + 'static) -> Re
 
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(u32, u16), String>>();
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+    let failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let failed_flag = failed.clone();
     let thread = std::thread::Builder::new().name("portputer-capture".into()).spawn(move || {
         let start = || -> Result<(cpal::Stream, u32, u16), String> {
             let host = cpal::default_host();
@@ -57,7 +61,11 @@ pub fn start_capture(on_audio: impl FnMut(&[f32], usize) + Send + 'static) -> Re
             let on_audio = Arc::new(Mutex::new(on_audio));
             let build = |config: cpal::StreamConfig| {
                 let on_audio = on_audio.clone();
-                let err = |e| tracing::warn!("capture: {e}");
+                let failed = failed_flag.clone();
+                let err = move |e| {
+                    tracing::warn!("capture: {e}");
+                    failed.store(true, std::sync::atomic::Ordering::Relaxed);
+                };
                 match supported.sample_format() {
                     cpal::SampleFormat::I16 => {
                         let mut buf = Vec::new();
@@ -118,6 +126,7 @@ pub fn start_capture(on_audio: impl FnMut(&[f32], usize) + Send + 'static) -> Re
         Ok(Ok((rate, channels))) => Ok(Capture {
             rate,
             channels,
+            failed,
             _thread: StreamThread { stop: Some(stop_tx), thread: Some(thread) },
         }),
         Ok(Err(e)) => {
@@ -155,7 +164,7 @@ pub fn test_tone(mut on_audio: impl FnMut(&[f32], usize) + Send + 'static) -> Ca
             }
         }
     });
-    Capture { rate: 48000, channels: 2, _thread: StreamThread { stop: Some(stop_tx), thread: Some(thread) } }
+    Capture { rate: 48000, channels: 2, failed: Default::default(), _thread: StreamThread { stop: Some(stop_tx), thread: Some(thread) } }
 }
 
 #[cfg(target_os = "android")]
@@ -329,7 +338,7 @@ pub fn start_input(mut on_audio: impl FnMut(&[f32], usize, u32) + Send + 'static
         }
     })?;
     match ready_rx.recv() {
-        Ok(Ok((rate, channels))) => Ok(Capture { rate, channels, _thread: StreamThread { stop: Some(stop_tx), thread: Some(thread) } }),
+        Ok(Ok((rate, channels))) => Ok(Capture { rate, channels, failed: Default::default(), _thread: StreamThread { stop: Some(stop_tx), thread: Some(thread) } }),
         Ok(Err(e)) => {
             let _ = thread.join();
             Err(Error::Audio(e))
@@ -382,7 +391,7 @@ pub fn start_input(mut on_audio: impl FnMut(&[f32], usize, u32) + Send + 'static
         }
     })?;
     match ready_rx.recv() {
-        Ok(Ok((rate, channels))) => Ok(Capture { rate, channels, _thread: StreamThread { stop: Some(stop_tx), thread: Some(thread) } }),
+        Ok(Ok((rate, channels))) => Ok(Capture { rate, channels, failed: Default::default(), _thread: StreamThread { stop: Some(stop_tx), thread: Some(thread) } }),
         Ok(Err(e)) => {
             let _ = thread.join();
             Err(Error::Audio(e))
@@ -867,6 +876,6 @@ pub mod loopback {
             }
             restore();
         })?;
-        Ok(Capture { rate, channels: 2, _thread: StreamThread { stop: Some(stop_tx), thread: Some(thread) } })
+        Ok(Capture { rate, channels: 2, failed: Default::default(), _thread: StreamThread { stop: Some(stop_tx), thread: Some(thread) } })
     }
 }

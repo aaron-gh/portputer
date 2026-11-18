@@ -967,6 +967,12 @@ impl AudioHub {
     ) -> Result<(AudioSubscription, ServerMessage, Result<(), String>), Error> {
         let inner = self.0.clone();
         let mut state = inner.state.lock().unwrap();
+        // A capture whose device went away delivers nothing; start a new one
+        // on the current default device. The old send thread ends when the
+        // old capture drops its sender.
+        if state.capture.as_ref().is_some_and(|c| c.failed.load(Ordering::Relaxed)) {
+            state.capture = None;
+        }
         if state.capture.is_none() {
             let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<i16>>(64);
             let capture = audio::start_capture(move |samples, channels| {
